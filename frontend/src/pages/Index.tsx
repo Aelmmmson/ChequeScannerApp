@@ -1070,7 +1070,7 @@ const Index = () => {
                           className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
                           title="Clear image"
                         >
-                          <XCircle className="h-4 w-4" />
+                          <XCircle className="h-3 w-3" />
                         </button>
                       </div>
                       <input
