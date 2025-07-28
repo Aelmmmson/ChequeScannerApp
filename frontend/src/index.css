@@ -1,0 +1,281 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out forwards;
+  }
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-slide-up {
+    animation: slide-up 0.6s ease-out forwards;
+  }
+}
+
+
+/* Card */
+		.flip-card {
+			background-color: transparent;
+			width: 300px;
+			height: 190px;
+			perspective: 1000px;
+			color: white;
+		}
+
+		.heading_8264 {
+			position: absolute;
+			letter-spacing: .2em;
+			font-size: 0.55em;
+			top: 3em;
+			left: 23.6em;
+		}
+
+		.logo {
+			position: absolute;
+			top: 7.8em;
+			left: 15.3em;
+		}
+
+		.chip {
+			position: absolute;
+			top: 3.3em;
+			left: 1.5em;
+		}
+
+		.contactless {
+			position: absolute;
+			top: 4.5em;
+			left: 16.1em;
+		}
+
+		.number {
+			position: absolute;
+			font-weight: bold;
+			font-size: .8em;
+			top: 6.5em;
+			left: 1.6em;
+			letter-spacing: .1em;
+		}
+
+		.valid_thru {
+			position: absolute;
+			font-weight: bold;
+			top: 45.8em;
+			font-size: .15em;
+			left: 10.3em;
+			letter-spacing: 0.5em;
+		}
+
+		.date_8264 {
+			position: absolute;
+			font-weight: bold;
+			font-size: 0.6em;
+			top: 12.2em;
+			left: 2.6em;
+		}
+
+		.name {
+			position: absolute;
+			font-weight: bold;
+			font-size: 0.8em;
+			top: 11.1em;
+			left: 1.8em;
+			letter-spacing: 0.05em;
+		}
+
+		.strip {
+			position: absolute;
+			background-color: black;
+			width: 18.7em;
+			height: 1.5em;
+			top: 2.4em;
+			background: repeating-linear-gradient(45deg,
+					#303030,
+					#303030 10px,
+					#202020 10px,
+					#202020 20px);
+		}
+
+		.mstrip {
+			position: absolute;
+			background-color: rgb(255, 255, 255);
+			width: 8em;
+			height: 0.8em;
+			top: 5em;
+			left: 1.8em;
+			border-radius: 2.5px;
+		}
+
+		.sstrip {
+			position: absolute;
+			background-color: rgb(255, 255, 255);
+			width: 4.1em;
+			height: 0.8em;
+			top: 5em;
+			left: 11em;
+			border-radius: 2.5px;
+		}
+
+		.code {
+			font-weight: bold;
+			text-align: center;
+			margin: -.2em;
+			color: black;
+		}
+
+		.flip-card-inner {
+			position: relative;
+			width: 100%;
+			height: 100%;
+			text-align: center;
+			transition: transform 0.8s;
+			transform-style: preserve-3d;
+		}
+
+		.flip-card:hover .flip-card-inner {
+			transform: rotateY(180deg);
+		}
+
+		.flip-card-front,
+		.flip-card-back {
+			box-shadow: 0 8px 14px 0 rgba(0, 0, 0, 0.2);
+			position: absolute;
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			width: 100%;
+			height: 100%;
+			-webkit-backface-visibility: hidden;
+			backface-visibility: hidden;
+			border-radius: 1rem;
+		}
+
+		.flip-card-front {
+			box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 2px, rgba(0, 0, 0, 0.3) 0px 7px 13px -3px, rgba(0, 0, 0, 0.2) 0px -1px 0px inset;
+			background-color: #171717;
+		}
+
+		.flip-card-back {
+			box-shadow: rgba(0, 0, 0, 0.4) 0px 2px 2px, rgba(0, 0, 0, 0.3) 0px 7px 13px -3px, rgba(0, 0, 0, 0.2) 0px -1px 0px inset;
+			background-color: #171717;
+			transform: rotateY(180deg);
+		}
+
+		/* Extra small devices (phones, 600px and down) */
+
+		@media only screen and (max-width: 600px) {
+			.flip-card {
+				margin-bottom: 25px;
+			}
+
+		}
+	/* </style> */
