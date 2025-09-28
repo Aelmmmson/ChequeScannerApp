@@ -47,7 +47,7 @@ http://localhost/vscanner/view?voucherNo=1234506
 
 ## Backend Integration
 
-The frontend is designed to work with a Spring Boot backend that implements these endpoints:
+The frontend is designed to work with a C# backend that implements these endpoints:
 
 - `GET /api/device-status`: Returns device connection status
 - `POST /api/connect`: Connects to the scanning device

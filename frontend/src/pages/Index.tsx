@@ -5,61 +5,204 @@ import SidebarButton from '@/components/SidebarButton';
 import InfoField from '@/components/InfoField';
 import ImageDisplay from '@/components/ImageDisplay';
 import { api } from '@/services/api';
-import { ChevronDown, Scan, Save, Power, X, Edit, RefreshCw, XCircle } from 'lucide-react';
+import { ChevronDown, Scan, Save, Power, X, RefreshCw, User, Camera, ScanFace, CheckCircle, XCircle, ArrowLeft, ArrowRight } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
+import Slider from 'react-slick';
+import "slick-carousel/slick/slick.css";
+import "slick-carousel/slick/slick-theme.css";
 
-// Function to process image (crop from above bottom right with margin, grayscale, high contrast)
-const processSignatureImage = (base64Image: string): Promise<string> => {
+// Function to process signature image (crop, grayscale, high contrast)
+const processSignatureImage = (base64Image: string, requiredSignatures: number = 1): Promise<string[]> => {
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = "Anonymous";
     img.onload = () => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve([]);
 
-      // Crop bottom right with a margin from the bottom
-      const cropWidth = img.width * 0.32; // 25% of width .... 0.28 for Stanbic ...
-      const cropHeight = img.height * 0.13; // 25% of height ... 0.20 for Stanbic ...
-      const marginFromBottom = img.height * 0.25; // 10% margin from bottom ... 0.18 for Stanbic cheque
-      const cropX = img.width - cropWidth; // Start from right edge
-      const cropY = img.height - cropHeight - marginFromBottom; // Shift up by margin
-      canvas.width = cropWidth;
-      canvas.height = cropHeight;
+      const results: string[] = [];
 
-      if (ctx) {
+      if (requiredSignatures === 1) {
+        // Single signature crop
+        const cropWidth = img.width * 0.25;
+        const cropHeight = img.height * 0.13;
+        const marginFromBottom = img.height * 0.18;
+        const cropX = img.width - cropWidth;
+        const cropY = img.height - cropHeight - marginFromBottom;
+        canvas.width = cropWidth;
+        canvas.height = cropHeight;
+
         ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
         // Convert to grayscale
         const imageData = ctx.getImageData(0, 0, cropWidth, cropHeight);
         const data = imageData.data;
         for (let i = 0; i < data.length; i += 4) {
-          const red = data[i];
-          const green = data[i + 1];
-          const blue = data[i + 2];
-          const gray = 0.2989 * red + 0.5870 * green + 0.1140 * blue; // Luminance formula
+          const gray = 0.2989 * data[i] + 0.5870 * data[i + 1] + 0.1140 * data[i + 2];
           data[i] = data[i + 1] = data[i + 2] = gray;
         }
         ctx.putImageData(imageData, 0, 0);
 
         // Apply high contrast
-        const contrast = 100; // Adjust contrast (100 = max)
+        const contrast = 100;
         const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
         for (let i = 0; i < data.length; i += 4) {
-          data[i] = factor * (data[i] - 128) + 128;     // Red
-          data[i + 1] = factor * (data[i + 1] - 128) + 128; // Green
-          data[i + 2] = factor * (data[i + 2] - 128) + 128; // Blue
-          // Clamp values to [0, 255]
-          data[i] = Math.min(Math.max(data[i], 0), 255);
-          data[i + 1] = Math.min(Math.max(data[i + 1], 0), 255);
-          data[i + 2] = Math.min(Math.max(data[i + 2], 0), 255);
+          data[i] = Math.min(Math.max(factor * (data[i] - 128) + 128, 0), 255);
+          data[i + 1] = Math.min(Math.max(factor * (data[i + 1] - 128) + 128, 0), 255);
+          data[i + 2] = Math.min(Math.max(factor * (data[i + 2] - 128) + 128, 0), 255);
         }
         ctx.putImageData(imageData, 0, 0);
 
-        resolve(canvas.toDataURL('image/jpeg'));
+        results.push(canvas.toDataURL('image/jpeg'));
+      } else {
+        // Multiple signatures crop
+        const cropWidth = img.width * 0.20;
+        const cropHeight = img.height * 0.22;
+        const marginFromBottom = img.height * 0.18;
+        const marginBetween = img.width * 0.01;
+
+        for (let i = 0; i < requiredSignatures; i++) {
+          canvas.width = cropWidth;
+          canvas.height = cropHeight;
+          const cropX = img.width - (cropWidth * (requiredSignatures - i)) - (marginBetween * i);
+          const cropY = img.height - cropHeight - marginFromBottom;
+
+          ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+          // Convert to grayscale
+          const imageData = ctx.getImageData(0, 0, cropWidth, cropHeight);
+          const data = imageData.data;
+          for (let j = 0; j < data.length; j += 4) {
+            const gray = 0.2989 * data[j] + 0.5870 * data[j + 1] + 0.1140 * data[j + 2];
+            data[j] = data[j + 1] = data[j + 2] = gray;
+          }
+          ctx.putImageData(imageData, 0, 0);
+
+          // Apply high contrast
+          const contrast = 100;
+          const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+          for (let j = 0; j < data.length; j += 4) {
+            data[j] = Math.min(Math.max(factor * (data[j] - 128) + 128, 0), 255);
+            data[j + 1] = Math.min(Math.max(factor * (data[j + 1] - 128) + 128, 0), 255);
+            data[j + 2] = Math.min(Math.max(factor * (data[j + 2] - 128) + 128, 0), 255);
+          }
+          ctx.putImageData(imageData, 0, 0);
+
+          results.push(canvas.toDataURL('image/jpeg'));
+        }
       }
+
+      resolve(results);
     };
     img.src = base64Image;
   });
+};
+
+// Function to fetch account data (signatures and photos) from external API
+const fetchAccountData = async (accountNumber: string): Promise<{ signatures: string[], photos: string[], requiredSignatures: number, accountType: string }> => {
+  try {
+    const response = await api.fetchAccountData(accountNumber);
+    if (!response.approved || !Array.isArray(response.approved) || response.approved.length === 0) {
+      throw new Error('Invalid response from external API: approved array is missing or empty');
+    }
+    const signatures = [];
+    const photos = [];
+    for (const item of response.approved) {
+      if (!item.signature || !item.photo) {
+        throw new Error('Invalid response from external API: signature or photo missing in approved item');
+      }
+      signatures.push(item.signature);
+      photos.push(item.photo);
+    }
+    return {
+      signatures,
+      photos,
+      requiredSignatures: response.approved.length, // Use number of signatures returned by API
+      accountType: response.approved.length > 1 ? 'joint' : 'personal' // Infer account type
+    };
+  } catch (error: unknown) {
+    console.error('Error fetching account data:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(errorMessage);
+  }
+};
+
+// Function to compare signatures
+const compareSignatures = async (chequeSignatures: string[], dbSignatures: string[]): Promise<number[][]> => {
+  const similarities: number[][] = [];
+  for (const chequeSig of chequeSignatures) {
+    const chequeSimilarities: number[] = [];
+    for (const dbSig of dbSignatures) {
+      try {
+        const formData = new FormData();
+        const chequeBlob = await fetch(chequeSig).then(res => res.blob());
+        const dbBlob = await fetch(dbSig).then(res => res.blob());
+        formData.append('signature1', chequeBlob, 'signature1.jpg');
+        formData.append('signature2', dbBlob, 'signature2.jpg');
+
+        const response = await fetch('http://localhost:7007/compare-signatures', {
+          method: 'POST',
+          body: formData
+        });
+
+        const result = await response.json();
+        if (response.ok) {
+          const similarity = parseFloat(result.similarity) * 100;
+          chequeSimilarities.push(similarity);
+        } else {
+          chequeSimilarities.push(0);
+        }
+      } catch (error: unknown) {
+        console.error('Error comparing signatures:', error);
+        chequeSimilarities.push(0);
+      }
+    }
+    similarities.push(chequeSimilarities);
+  }
+  return similarities;
+};
+
+// Function to compare faces
+const compareFaces = async (capturedFace: string, customerPhotos: string[]): Promise<FaceResult[]> => {
+  const results: FaceResult[] = [];
+  for (const customerPhoto of customerPhotos) {
+    try {
+      const formData = new FormData();
+      const liveBlob = await fetch(capturedFace).then(res => res.blob());
+      const customerBlob = await fetch(customerPhoto).then(res => res.blob());
+      formData.append('livePhoto', liveBlob, 'livePhoto.jpg');
+      formData.append('customerPhoto', customerBlob, 'customerPhoto.jpg');
+
+      const response = await fetch('http://localhost:7007/compare-faces', {
+        method: 'POST',
+        body: formData
+      });
+
+      const result = await response.json();
+      if (response.ok) {
+        results.push({
+          faceUrl: customerPhoto,
+          isMatch: result.isMatch,
+          similarity: result.similarity * 100
+        });
+      } else {
+        results.push({
+          faceUrl: customerPhoto,
+          isMatch: false,
+          similarity: 0
+        });
+      }
+    } catch (error: unknown) {
+      console.error('Error comparing faces:', error);
+      results.push({
+        faceUrl: customerPhoto,
+        isMatch: false,
+        similarity: 0
+      });
+    }
+  }
+  return results;
 };
 
 interface VoucherData {
@@ -96,11 +239,24 @@ interface VoucherData {
   amountWords: string;
   accountHolder: string;
   signature: string;
+  payeeName: string;
+  bankName: string;
+  bankBranch: string;
+  requiredSignatures: string;
+  signaturesPresent: string;
+  signatureStatus: string;
+  amountMismatch: string;
 }
 
 interface ErrorResponse {
   success: boolean;
   message: string;
+}
+
+interface FaceResult {
+  faceUrl: string;
+  isMatch: boolean;
+  similarity: number;
 }
 
 type ScanResponse = VoucherData | ErrorResponse;
@@ -175,16 +331,25 @@ const Index = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
-  const [uploadedSignature, setUploadedSignature] = useState<string | null>(null);
-  const [similarity, setSimilarity] = useState<number | null>(null);
-  const [processedFrontImage, setProcessedFrontImage] = useState<string | null>(null);
-
+  const [chequeSignatures, setChequeSignatures] = useState<string[]>([]);
+  const [dbSignatures, setDbSignatures] = useState<string[]>([]);
+  const [similarities, setSimilarities] = useState<number[][]>([]);
+  const [requiredSignatures, setRequiredSignatures] = useState<number>(1);
+  const [accountType, setAccountType] = useState<string>('personal');
+  const [isLoadingSignatures, setIsLoadingSignatures] = useState<boolean>(false);
+  const [currentChequeIndex, setCurrentChequeIndex] = useState<number>(0);
+  const [isFaceRecognitionOpen, setIsFaceRecognitionOpen] = useState(false);
+  const [capturedFace, setCapturedFace] = useState<string | null>(null);
+  const [customerPhotos, setCustomerPhotos] = useState<string[]>([]);
+  const [faceResults, setFaceResults] = useState<FaceResult[]>([]);
   const [isDeviceConnected, setIsDeviceConnected] = useState<boolean>(false);
   const [connectedDevice, setConnectedDevice] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [currentAction, setCurrentAction] = useState<string>("");
   const [devices, setDevices] = useState<string[]>([]);
   const [hasScanned, setHasScanned] = useState<boolean>(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [voucherData, setVoucherData] = useState<VoucherData>({
     voucherNo: "",
@@ -219,10 +384,15 @@ const Index = () => {
     amount: "",
     amountWords: "",
     accountHolder: "",
-    signature: ""
+    signature: "",
+    payeeName: "",
+    bankName: "",
+    bankBranch: "",
+    requiredSignatures: "",
+    signaturesPresent: "",
+    signatureStatus: "",
+    amountMismatch: ""
   });
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const storedVoucherNo = localStorage.getItem('voucherNo');
@@ -233,10 +403,34 @@ const Index = () => {
   }, [voucherNoFromUrl]);
 
   useEffect(() => {
-    if (voucherData.frontImage && !processedFrontImage) {
-      processSignatureImage(`data:image/jpeg;base64,${voucherData.frontImage}`).then(setProcessedFrontImage);
+    if (voucherData.frontImage && docType === 'CHECK' && isCompareModalOpen) {
+      setIsLoadingSignatures(true);
+      const fetchAndProcess = async () => {
+        try {
+          const { signatures, requiredSignatures: reqSigs, accountType: accType } = await fetchAccountData(voucherData.accountNumber);
+          const chequeSigs = await processSignatureImage(`data:image/jpeg;base64,${voucherData.frontImage}`, reqSigs);
+          const similarityScores = await compareSignatures(chequeSigs, signatures);
+
+          setChequeSignatures(chequeSigs);
+          setDbSignatures(signatures);
+          setSimilarities(similarityScores);
+          setRequiredSignatures(reqSigs);
+          setAccountType(accType);
+          setCurrentChequeIndex(0);
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          toast({
+            title: "Signature Fetch Error",
+            description: errorMessage || "Failed to fetch or process signatures.",
+            variant: "destructive"
+          });
+        } finally {
+          setIsLoadingSignatures(false);
+        }
+      };
+      fetchAndProcess();
     }
-  }, [voucherData.frontImage, processedFrontImage]);
+  }, [voucherData.frontImage, isCompareModalOpen, voucherData.accountNumber, docType, toast]);
 
   useEffect(() => {
     const initialize = async () => {
@@ -270,10 +464,11 @@ const Index = () => {
             variant: "destructive"
           });
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         toast({
           title: "Initialization Error",
-          description: "Error fetching devices or connecting.",
+          description: errorMessage || "Error fetching devices or connecting.",
           variant: "destructive"
         });
       } finally {
@@ -302,7 +497,8 @@ const Index = () => {
               description: `Connected to ${response.deviceName || "device"}.`,
             });
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
           setIsDeviceConnected(false);
           setConnectedDevice("");
         }
@@ -314,6 +510,93 @@ const Index = () => {
       }
     };
   }, [isDeviceConnected, toast]);
+
+  // Function to handle face upload and comparison
+  const handleFaceUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      toast({
+        title: "No File Selected",
+        description: "Please select an image to upload.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const imageSrc = reader.result as string;
+      setCapturedFace(imageSrc);
+
+      if (!voucherData.accountNumber) {
+        toast({
+          title: "Missing Account Number",
+          description: "Please scan a cheque to provide an account number before face recognition.",
+          variant: "destructive"
+        });
+        setCapturedFace(null);
+        return;
+      }
+
+      setIsLoading(true);
+      setCurrentAction("Fetching customer photos...");
+
+      try {
+        const { photos } = await fetchAccountData(voucherData.accountNumber);
+        setCustomerPhotos(photos);
+
+        setCurrentAction("Comparing faces...");
+        const results = await compareFaces(imageSrc, photos);
+
+        setFaceResults(results);
+
+        const bestResult = results.reduce((prev, curr) => curr.similarity > prev.similarity ? curr : prev, results[0]);
+        toast({
+          title: bestResult.isMatch ? "Face Match Found" : "No Face Match",
+          description: `Best Similarity: ${bestResult.similarity.toFixed(2)}%`,
+          variant: bestResult.isMatch ? "default" : "destructive"
+        });
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        toast({
+          title: "Face Comparison Error",
+          description: errorMessage || "Failed to compare faces.",
+          variant: "destructive"
+        });
+        setCustomerPhotos([]);
+        setFaceResults([]);
+      } finally {
+        setIsLoading(false);
+        setCurrentAction("");
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Open face recognition sidebar
+  const handleOpenFaceRecognition = () => {
+    setIsFaceRecognitionOpen(true);
+    setCapturedFace(null);
+    setCustomerPhotos([]);
+    setFaceResults([]);
+  };
+
+  // Handle click outside to close sidebar
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (sidebarRef.current && !sidebarRef.current.contains(event.target as Node)) {
+        setIsFaceRecognitionOpen(false);
+        setCapturedFace(null);
+        setCustomerPhotos([]);
+        setFaceResults([]);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const handleConnect = async () => {
     setIsLoading(true);
@@ -335,10 +618,11 @@ const Index = () => {
           variant: "destructive"
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       toast({
         title: "Connection Error",
-        description: "An error occurred while connecting to the device.",
+        description: errorMessage || "An error occurred while connecting to the device.",
         variant: "destructive"
       });
     } finally {
@@ -378,8 +662,8 @@ const Index = () => {
         return;
       }
       if ('voucherNo' in response && (response.frontImage || response.backImage || response.cardType || response.trackData1 || response.trackData2 || response.mpData)) {
-        setVoucherData(prev => ({
-          ...prev,
+        let updatedVoucherData = {
+          ...voucherData,
           voucherType: response.voucherType,
           micr: response.micr,
           frontImage: response.frontImage,
@@ -410,8 +694,63 @@ const Index = () => {
           amount: response.amount,
           amountWords: response.amountWords,
           accountHolder: response.accountHolder,
-          signature: response.signature
-        }));
+          signature: response.signature,
+          payeeName: response.payeeName,
+          bankName: response.bankName,
+          bankBranch: response.bankBranch,
+          requiredSignatures: response.requiredSignatures,
+          signaturesPresent: response.signaturesPresent,
+          signatureStatus: response.signatureStatus,
+          amountMismatch: response.amountMismatch
+        };
+
+        // If scanning a check, extract additional data using server.js
+        if (docType === 'CHECK' && response.frontImage) {
+          try {
+            setCurrentAction("Extracting cheque data...");
+            const ocrResponse = await api.extractChequeData(response.frontImage);
+            if (ocrResponse.success && ocrResponse.extractedData) {
+              updatedVoucherData = {
+                ...updatedVoucherData,
+                micr: ocrResponse.extractedData.MICR || updatedVoucherData.micr || "",
+                checkNumber: ocrResponse.extractedData.CheckNumber || updatedVoucherData.checkNumber || "",
+                routingNumber: ocrResponse.extractedData.RoutingNumber || updatedVoucherData.routingNumber || "",
+                accountNumber: ocrResponse.extractedData.AccountNumber || updatedVoucherData.accountNumber || "",
+                bankCode: ocrResponse.extractedData.BankCode || updatedVoucherData.bankCode || "",
+                accountHolder: ocrResponse.extractedData.PayerAccountHolderName || updatedVoucherData.accountHolder || "",
+                amount: ocrResponse.extractedData.AmountFigures || updatedVoucherData.amount || "",
+                amountWords: ocrResponse.extractedData.AmountWords || updatedVoucherData.amountWords || "",
+                checkDate: ocrResponse.extractedData.Date || updatedVoucherData.checkDate || "",
+                payeeName: ocrResponse.extractedData.PayeeName || "",
+                bankName: ocrResponse.extractedData.BankName || "",
+                bankBranch: ocrResponse.extractedData.BankBranch || "",
+                requiredSignatures: ocrResponse.extractedData.RequiredSignatures || "",
+                signaturesPresent: ocrResponse.extractedData.SignaturesPresent || "",
+                signatureStatus: ocrResponse.extractedData.SignatureStatus || "",
+                amountMismatch: ocrResponse.extractedData.AmountMismatch || ""
+              };
+              toast({
+                title: "Data Extracted",
+                description: "Successfully extracted additional cheque data."
+              });
+            } else {
+              toast({
+                title: "OCR Extraction Failed",
+                description: ocrResponse.error || "Failed to extract cheque data.",
+                variant: "destructive"
+              });
+            }
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            toast({
+              title: "OCR Extraction Error",
+              description: errorMessage || "Error extracting cheque data.",
+              variant: "destructive"
+            });
+          }
+        }
+
+        setVoucherData(updatedVoucherData);
         setHasScanned(true);
         toast({
           title: "Scan Successful",
@@ -426,10 +765,11 @@ const Index = () => {
           variant: "destructive"
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       toast({
         title: "Scan Error",
-        description: error.message || `An error occurred while scanning the ${docType === 'CHECK' ? 'check' : 'card'}.`,
+        description: errorMessage || `An error occurred while scanning the ${docType === 'CHECK' ? 'check' : 'card'}.`,
         variant: "destructive"
       });
     } finally {
@@ -490,7 +830,14 @@ const Index = () => {
         amount: docType === 'CHECK' ? voucherData.amount : "",
         amountWords: docType === 'CHECK' ? voucherData.amountWords : "",
         accountHolder: docType === 'CHECK' ? voucherData.accountHolder : "",
-        signature: docType === 'CHECK' ? voucherData.signature : ""
+        signature: docType === 'CHECK' ? voucherData.signature : "",
+        payeeName: docType === 'CHECK' ? voucherData.payeeName : "",
+        bankName: docType === 'CHECK' ? voucherData.bankName : "",
+        bankBranch: docType === 'CHECK' ? voucherData.bankBranch : "",
+        requiredSignatures: docType === 'CHECK' ? voucherData.requiredSignatures : "",
+        signaturesPresent: docType === 'CHECK' ? voucherData.signaturesPresent : "",
+        signatureStatus: docType === 'CHECK' ? voucherData.signatureStatus : "",
+        amountMismatch: docType === 'CHECK' ? voucherData.amountMismatch : ""
       };
       const response = await api.saveToDatabase(saveData);
       if (response.success) {
@@ -531,15 +878,28 @@ const Index = () => {
           amount: "",
           amountWords: "",
           accountHolder: "",
-          signature: ""
+          signature: "",
+          payeeName: "",
+          bankName: "",
+          bankBranch: "",
+          requiredSignatures: "",
+          signaturesPresent: "",
+          signatureStatus: "",
+          amountMismatch: ""
         });
         setHasScanned(false);
         setShowAdvanced(false);
         setIsModalOpen(false);
         setIsCompareModalOpen(false);
-        setUploadedSignature(null);
-        setSimilarity(null);
-        setProcessedFrontImage(null);
+        setIsFaceRecognitionOpen(false);
+        setChequeSignatures([]);
+        setDbSignatures([]);
+        setSimilarities([]);
+        setRequiredSignatures(1);
+        setAccountType('personal');
+        setCapturedFace(null);
+        setCustomerPhotos([]);
+        setFaceResults([]);
         if (!isVoucherNoRequired) {
           localStorage.removeItem('voucherNo');
         }
@@ -550,10 +910,11 @@ const Index = () => {
           variant: "destructive"
         });
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       toast({
         title: "Save Error",
-        description: error.message || "An error occurred while saving to the database.",
+        description: errorMessage || "An error occurred while saving to the database.",
         variant: "destructive"
       });
     } finally {
@@ -566,99 +927,6 @@ const Index = () => {
     window.location.reload();
   };
 
-  const handleFileDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const file = event.dataTransfer.files[0];
-    if (file && /image\/(jpeg|jpg|png)/.test(file.type)) {
-      const reader = new FileReader();
-      reader.onloadend = () => setUploadedSignature(reader.result as string);
-      reader.readAsDataURL(file);
-    } else {
-      toast({
-        title: "Invalid File",
-        description: "Please upload a JPEG, JPG, or PNG image.",
-        variant: "destructive"
-      });
-    }
-  };
-
-  const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && /image\/(jpeg|jpg|png)/.test(file.type)) {
-      const reader = new FileReader();
-      reader.onloadend = () => setUploadedSignature(reader.result as string);
-      reader.readAsDataURL(file);
-    } else {
-      toast({
-        title: "Invalid File",
-        description: "Please upload a JPEG, JPG, or PNG image.",
-        variant: "destructive"
-      });
-    }
-  };
-
-  const handleCompareSignatures = async () => {
-    if (!processedFrontImage || !uploadedSignature) {
-      toast({
-        title: "Missing Images",
-        description: "Please upload a second signature image to compare.",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setIsLoading(true);
-    setCurrentAction("Comparing signatures...");
-    try {
-      const formData = new FormData();
-      const frontBlob = await fetch(processedFrontImage).then(res => res.blob());
-      const uploadedBlob = await fetch(uploadedSignature).then(res => res.blob());
-      formData.append('signature1', frontBlob, 'signature1.jpg');
-      formData.append('signature2', uploadedBlob, 'signature2.jpg');
-
-      const response = await fetch('http://localhost:5000/compare-signatures', {
-        method: 'POST',
-        body: formData
-      });
-
-      const result = await response.json();
-      if (response.ok) {
-        const similarityValue = parseFloat(result.similarity) * 100; // Convert to percentage
-        setSimilarity(similarityValue);
-        toast({
-          title: "Comparison Result",
-          description: `Similarity: ${similarityValue.toFixed(2)}%`,
-        });
-      } else {
-        setSimilarity(null);
-        toast({
-          title: "Comparison Failed",
-          description: result.error || "Failed to compare signatures.",
-          variant: "destructive"
-        });
-      }
-    } catch (error: any) {
-      setSimilarity(null);
-      toast({
-        title: "Comparison Error",
-        description: error.message || "An error occurred while comparing signatures.",
-        variant: "destructive"
-      });
-    } finally {
-      setIsLoading(false);
-      setCurrentAction("");
-    }
-  };
-
-  const handleReset = () => {
-    setUploadedSignature(null);
-    setSimilarity(null);
-  };
-
-  const handleClear = () => {
-    setUploadedSignature(null);
-  };
-
   const handleOutsideClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) {
       setIsCompareModalOpen(false);
@@ -666,6 +934,16 @@ const Index = () => {
   };
 
   const { cardNumber, cardholderName, expiryDate, cardBrand } = parseCardDetails(voucherData.trackData1, voucherData.trackData2);
+
+  // Slider settings for pagination
+  const sliderSettings = {
+    dots: true,
+    infinite: false,
+    speed: 500,
+    slidesToShow: 1,
+    slidesToScroll: 1,
+    arrows: true
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
@@ -723,7 +1001,7 @@ const Index = () => {
             </SidebarButton>
           </div>
         </aside>
-        <main className="flex-1 p-8 overflow-y-auto space-y-4">
+        <main className="flex-1 p-8 overflow-y-auto space-y-4 relative">
           {isLoading && (
             <div className="bg-blue-50 text-blue-700 p-3 rounded-lg border border-blue-100 shadow-sm animate-pulse">
               <span className="font-medium text-sm">{currentAction}</span>
@@ -773,18 +1051,35 @@ const Index = () => {
                   readOnly={true}
                   compact={true}
                 />
-                <InfoField
-                  label="Bank Code"
-                  value={voucherData.bankCode}
-                  readOnly={true}
-                  compact={true}
-                />
-                <button
-                  onClick={() => setIsModalOpen(true)}
-                  className="p-2 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded w-full md:w-auto"
-                >
-                  Other
-                </button>
+                <div className="flex items-center gap-2">
+                  <InfoField
+                    label="Bank Code"
+                    value={voucherData.bankCode}
+                    readOnly={true}
+                    compact={true}
+                  />
+                  {/* <button
+                    onClick={handleOpenFaceRecognition}
+                    className="relative group flex items-center justify-center p-2 text-gray-700 hover:text-blue-600 transition-colors"
+                    title="ScanFace Recognition"
+                  >
+                    <ScanFace className="h-4 w-4" />
+                    <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-600 text-white text-[10px] rounded py-0.5 px-1 whitespace-nowrap">
+                      ScanFace Recognition
+                    </span>
+                  </button> */}
+                  <button
+                    onClick={() => setIsModalOpen(true)}
+                    disabled={!hasScanned || docType !== 'CHECK'}
+                    className="relative group flex items-center justify-center p-2 bg-blue-600 text-white hover:text-gray-100 transition-colors rounded-sm"
+                    title="Other or Advanced"
+                  >
+                    Advanced
+                    <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-600 text-white text-[10px] rounded py-0.5 px-1 whitespace-nowrap">
+                      Other or Advanced Options
+                    </span>
+                  </button>
+                </div>
               </div>
             )}
             <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-dashed border-blue-500 shadow-sm hover:shadow-md transition-all">
@@ -966,7 +1261,7 @@ const Index = () => {
                               cUIjO0Dm7HwvErEr0YxeibL1StSh37STafE4I7zcBdRq1DiOkdmlTJVnkQTBTS7X1FYyvfO4piaI
                               nKbDCDaT2anLudYXCRFsQBgAcIF2/Okwgvz5+Z4tsw118dzruvIvjhTB+HOuWy8UvovEH6beitBK
                               xDyxm9MmISKCWrzB7bSlaqGlsf0FC0gMjzTg6GgAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjMtMDIt
-                              MTNUMDg6MTk6NTYrMDA6MDCjlq7LAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDIzLTAyLTEzVDA4OjE5
+                              MTNUMDg6MTk6NTYrMDA6MDCjlq7LAAAAJXRFWHRkYXRlOm1oZGlmeQAyMDIzLTAyLTEzVDA4OjE5
                               OjU2KzAwOjAw0ssWdwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyMy0wMi0xM1QwODoxOTo1Nisw
                               MDowMIXeN6gAAAAASUVORK5CYII="></image>
                             </svg>
@@ -998,111 +1293,236 @@ const Index = () => {
                 </div>
               )}
             </div>
-            {isModalOpen && docType === 'CHECK' && (
-              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                <div className="bg-white p-6 rounded-lg shadow-lg max-w-lg w-full">
-                  <h2 className="text-lg font-semibold text-gray-700 mb-4">Check Details</h2>
-                  <div className="space-y-2">
-                    <p className="text-sm"><strong>Full MICR:</strong> {voucherData.micr || 'N/A'}</p>
-                    <p className="text-sm"><strong>Check Number:</strong> {voucherData.checkNumber || 'N/A'}</p>
-                    <p className="text-sm"><strong>Routing Number:</strong> {voucherData.routingNumber || 'N/A'}</p>
-                    <p className="text-sm"><strong>Account Number:</strong> {voucherData.accountNumber || 'N/A'}</p>
-                    <p className="text-sm"><strong>Bank Code:</strong> {voucherData.bankCode || 'N/A'}</p>
-                    <p className="text-sm"><strong>Account Holder:</strong> {voucherData.accountHolder || 'N/A'}</p>
-                    <p className="text-sm"><strong>Date:</strong> {voucherData.checkDate || 'N/A'}</p>
-                    <p className="text-sm"><strong>Amount:</strong> {voucherData.amount || 'N/A'}</p>
-                    <p className="text-sm"><strong>Amount in Words:</strong> {voucherData.amountWords || 'N/A'}</p>
-                    <p className="text-sm"><strong>Signature:</strong> {voucherData.signature || 'N/A'}</p>
-                  </div>
-                  <button
-                    onClick={() => setIsModalOpen(false)}
-                    className="mt-4 p-2 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded w-full"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            )}
-            {isCompareModalOpen && processedFrontImage && (
-              <div
-                className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50"
-                onClick={handleOutsideClick}
-              >
-                <div className="bg-white p-4 rounded-lg shadow-2xl max-w-2xl w-full flex flex-col gap-2 relative transform transition-all duration-300 hover:scale-[1.01]">
-                  <button
-                    onClick={() => setIsCompareModalOpen(false)}
-                    className="absolute top-2 right-2 p-1 text-white bg-gray-800 hover:bg-red-600 rounded-full shadow-md hover:shadow-lg transition-all"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                  <h2 className="text-lg font-bold text-gray-800 mb-2 text-center">Signature Comparison</h2>
-                  {similarity !== null && (
-                    <div className={`text-sm font-semibold mb-2 text-center ${getSimilarityColor(similarity)}`}>
-                      Similarity: {similarity.toFixed(2)}%
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <div className="bg-white border border-dashed border-gray-300 rounded-md h-48 flex items-center justify-center flex-1 shadow-md hover:shadow-lg transition-all duration-200">
-                      <img 
-                        src={processedFrontImage} 
-                        alt="Processed front image for signature comparison"
-                        className="max-w-full max-h-full object-contain"
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <div
-                        className="border-2 border-dashed border-blue-300 bg-blue-50 rounded-md h-48 flex items-center justify-center cursor-pointer relative overflow-hidden shadow-md hover:shadow-lg hover:border-blue-400 transition-all duration-200"
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={handleFileDrop}
-                        onClick={() => fileInputRef.current?.click()}
-                      >
-                        {uploadedSignature ? (
-                          <img 
-                            src={uploadedSignature} 
-                            alt="Uploaded signature"
-                            className="max-w-full max-h-full object-contain"
-                          />
-                        ) : (
-                          <span className="text-gray-600 text-center px-2 text-xs">Drag and drop or click to upload a signature image (JPEG/JPG/PNG)</span>
-                        )}
-                        <button
-                          onClick={handleClear}
-                          className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 transition-colors"
-                          title="Clear image"
-                        >
-                          <XCircle className="h-3 w-3" />
-                        </button>
-                      </div>
-                      <input
-                        type="file"
-                        ref={fileInputRef}
-                        onChange={handleFileInputChange}
-                        accept="image/jpeg,image/jpg,image/png"
-                        className="hidden"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex justify-center gap-4 mt-2">
-                    <button
-                      onClick={handleReset}
-                      className="p-2 px-6 text-xs text-white bg-yellow-500 hover:bg-yellow-600 rounded flex items-center gap-1 shadow-md hover:shadow-lg transition-all"
-                    >
-                      <RefreshCw className="h-4 w-4" /> Reset
-                    </button>
-                    <button
-                      onClick={handleCompareSignatures}
-                      className="p-2 px-6 text-xs text-white bg-green-500 hover:bg-green-600 rounded flex items-center gap-1 shadow-md hover:shadow-lg transition-all"
-                    >
-                      Compare
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
             <footer className="py-4 text-center">
               <p className="text-blue-600 text-sm italic animate-pulse">Powered by X100</p>
             </footer>
           </div>
+          {isFaceRecognitionOpen && (
+            <aside
+              ref={sidebarRef}
+              className="fixed top-0 right-0 h-full w-96 bg-white shadow-2xl p-6 overflow-y-auto transform transition-transform duration-300 ease-in-out z-50"
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-gray-700">ScanFace Recognition</h2>
+                <button
+                  onClick={() => {
+                    setIsFaceRecognitionOpen(false);
+                    setCapturedFace(null);
+                    setCustomerPhotos([]);
+                    setFaceResults([]);
+                  }}
+                  className="p-1 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
+                  title="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="space-y-6">
+                <div className="border border-dashed border-gray-300 rounded-lg p-4">
+                  <h3 className="text-lg font-semibold text-gray-700 mb-3">Upload Face Image</h3>
+                  <div className="relative h-64 bg-gray-100 rounded-md flex items-center justify-center mb-4">
+                    {isLoading ? (
+                      <div className="flex items-center justify-center h-full">
+                        <RefreshCw className="h-6 w-6 animate-spin text-blue-600" />
+                        <span className="ml-2 text-sm text-gray-600">Processing...</span>
+                      </div>
+                    ) : capturedFace ? (
+                      <img
+                        src={capturedFace}
+                        alt="Uploaded face"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <div className="text-gray-400 text-center">
+                        <Camera className="h-12 w-12 mx-auto mb-2" />
+                        <p>No face uploaded</p>
+                      </div>
+                    )}
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/jpg,image/png"
+                    ref={fileInputRef}
+                    className="hidden"
+                    onChange={handleFaceUpload}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isLoading}
+                    className={`w-full p-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center justify-center gap-2 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <Camera className="h-4 w-4" />
+                    Upload Photo
+                  </button>
+                </div>
+                {customerPhotos.length > 0 && faceResults.length > 0 && (
+                  <div className="border border-dashed border-gray-300 rounded-lg p-4">
+                    <h3 className="text-lg font-semibold text-gray-700 mb-3">Customer Faces</h3>
+                    <Slider {...sliderSettings}>
+                      {customerPhotos.map((photo, index) => (
+                        <div key={index} className="relative h-64 flex items-center justify-center">
+                          <img
+                            src={photo}
+                            alt={`Customer face ${index + 1}`}
+                            className="max-h-full max-w-full object-contain transition-transform duration-200 hover:scale-110"
+                          />
+                          <div className="absolute top-2 right-2">
+                            {faceResults[index]?.isMatch ? (
+                              <CheckCircle className="h-6 w-6 text-green-500 bg-white bg-opacity-75 rounded-full p-1" />
+                            ) : (
+                              <XCircle className="h-6 w-6 text-red-500 bg-white bg-opacity-75 rounded-full p-1" />
+                            )}
+                          </div>
+                          <div className="absolute bottom-2 text-center w-full">
+                            <span className={`text-sm font-semibold ${getSimilarityColor(faceResults[index]?.similarity || 0)}`}>
+                              Similarity: {(faceResults[index]?.similarity || 0).toFixed(2)}%
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </Slider>
+                  </div>
+                )}
+              </div>
+              <div className="mt-6 flex justify-center gap-3">
+                <button
+                  onClick={() => {
+                    setIsFaceRecognitionOpen(false);
+                    setCapturedFace(null);
+                    setCustomerPhotos([]);
+                    setFaceResults([]);
+                  }}
+                  className="p-2 px-4 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
+                  disabled={isLoading}
+                >
+                  Cancel
+                </button>
+              </div>
+            </aside>
+          )}
+          {isModalOpen && docType === 'CHECK' && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white p-6 rounded-lg shadow-lg max-w-lg w-full">
+                <h2 className="text-lg font-semibold text-gray-700 mb-4">Check Details</h2>
+                <div className="space-y-2">
+                  <p className="text-sm"><strong>Full MICR:</strong> {voucherData.micr || 'N/A'}</p>
+                  <p className="text-sm"><strong>Check Number:</strong> {voucherData.checkNumber || 'N/A'}</p>
+                  <p className="text-sm"><strong>Routing Number:</strong> {voucherData.routingNumber || 'N/A'}</p>
+                  <p className="text-sm"><strong>Account Number:</strong> {voucherData.accountNumber || 'N/A'}</p>
+                  <p className="text-sm"><strong>Bank Code:</strong> {voucherData.bankCode || 'N/A'}</p>
+                  <p className="text-sm"><strong>Account Holder:</strong> {voucherData.accountHolder || 'N/A'}</p>
+                  <p className="text-sm"><strong>Date:</strong> {voucherData.checkDate || 'N/A'}</p>
+                  <p className="text-sm"><strong>Amount:</strong> {voucherData.amount || 'N/A'}</p>
+                  <p className="text-sm"><strong>Amount in Words:</strong> {voucherData.amountWords || 'N/A'}</p>
+                  <p className="text-sm"><strong>Payee Name:</strong> {voucherData.payeeName || 'N/A'}</p>
+                  <p className="text-sm"><strong>Bank Name:</strong> {voucherData.bankName || 'N/A'}</p>
+                  <p className="text-sm"><strong>Bank Branch:</strong> {voucherData.bankBranch || 'N/A'}</p>
+                  <p className="text-sm"><strong>Amount Mismatch:</strong> 
+                    <span className={`font-bold ${voucherData.amountMismatch === "Yes" ? "text-red-600" : (voucherData.amountMismatch === "No" ? "text-green-600" : "text-gray-500")}`}>
+                      {voucherData.amountMismatch || 'N/A'}
+                    </span>
+                  </p>
+                  <p className="text-sm"><strong>Required Signatures:</strong> {voucherData.requiredSignatures || 'N/A'}</p>
+                  <p className="text-sm"><strong>Signatures Present:</strong> {voucherData.signaturesPresent || 'N/A'}</p>
+                  <p className="text-sm"><strong>Signature Status:</strong> 
+                    <span className={`font-bold ${
+                      voucherData.signatureStatus === "INSUFFICIENT" || voucherData.signatureStatus === "NONE" ? "text-red-600" :
+                      (voucherData.signatureStatus === "VALID" ? "text-green-600" : "text-gray-500")
+                    }`}>
+                      {voucherData.signatureStatus || 'N/A'}
+                    </span>
+                  </p>
+                  <p className="text-sm"><strong>Signature:</strong> {voucherData.signature || 'N/A'}</p>
+                </div>
+                <button
+                  onClick={() => setIsModalOpen(false)}
+                  className="mt-4 p-2 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded w-full"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+          {isCompareModalOpen && voucherData.frontImage && (
+            <div
+              className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50"
+              onClick={handleOutsideClick}
+            >
+              <div className="bg-white p-4 rounded-lg shadow-2xl max-w-4xl w-full flex flex-col gap-2 relative transform transition-all duration-300 hover:scale-[1.01]">
+                <button
+                  onClick={() => setIsCompareModalOpen(false)}
+                  className="absolute top-2 right-2 p-1 text-white bg-gray-800 hover:bg-red-600 rounded-full shadow-md hover:shadow-lg transition-all"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+                <h2 className="text-lg font-bold text-gray-700 mb-2 text-center">Signature Comparison</h2>
+                {isLoadingSignatures ? (
+                  <div className="text-center text-sm text-gray-600 animate-pulse">Loading signatures...</div>
+                ) : chequeSignatures.length === 0 || dbSignatures.length === 0 ? (
+                  <div className="text-center text-sm text-red-600">No signatures available for comparison.</div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex justify-end items-center">
+                      {chequeSignatures.length > 1 && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setCurrentChequeIndex((prev) => Math.max(prev - 1, 0))}
+                            disabled={currentChequeIndex === 0}
+                            className="p-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                          >
+                            <ArrowLeft className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => setCurrentChequeIndex((prev) => Math.min(prev + 1, chequeSignatures.length - 1))}
+                            disabled={currentChequeIndex === chequeSignatures.length - 1}
+                            className="p-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                          >
+                            <ArrowRight className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-4 items-center justify-center">
+                      <div className="bg-white border border-dashed border-gray-300 rounded-md h-48 w-48 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200">
+                        <img 
+                          src={chequeSignatures[currentChequeIndex]} 
+                          alt={`Cheque signature ${currentChequeIndex + 1}`}
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      </div>
+                      {dbSignatures.map((dbSig, dbIndex) => (
+                        <div key={dbIndex} className="relative bg-white border border-dashed border-gray-300 rounded-md h-48 w-48 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200">
+                          <img 
+                            src={dbSig} 
+                            alt={`Database signature ${dbIndex + 1}`}
+                            className="max-w-full max-h-full object-contain"
+                          />
+                          <div className="absolute top-2 right-2 text-xs font-semibold text-white bg-black bg-opacity-50 rounded px-1 py-0.5">
+                            {similarities[currentChequeIndex][dbIndex].toFixed(2)}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-sm text-center text-gray-500">
+                      Cheque Signature {currentChequeIndex + 1} of {chequeSignatures.length}
+                    </p>
+                  </div>
+                )}
+                <button
+                  onClick={() => {
+                    setChequeSignatures([]);
+                    setDbSignatures([]);
+                    setSimilarities([]);
+                    setCurrentChequeIndex(0);
+                    setIsCompareModalOpen(false);
+                  }}
+                  className="p-2 px-6 text-xs text-white bg-yellow-500 hover:bg-yellow-600 rounded flex items-center gap-1 shadow-md hover:shadow-lg transition-all mx-auto mt-2"
+                >
+                  <RefreshCw className="h-4 w-4" /> Reset
+                </button>
+              </div>
+            </div>
+          )}
         </main>
       </div>
     </div>
