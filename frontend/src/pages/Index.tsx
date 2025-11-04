@@ -321,6 +321,75 @@ const getSimilarityColor = (similarity: number) => {
   return 'text-red-600';
 };
 
+
+// DetailItem component for consistent field display
+interface DetailItemProps {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  secure?: boolean;
+}
+
+// Compact DetailItem component
+const DetailItem: React.FC<DetailItemProps> = ({ label, value, highlight = false, secure = false }) => {
+  const displayValue = secure && value ? '••••' + value.slice(-4) : value;
+  
+  return (
+    <div className="border-b border-gray-100 pb-2 last:border-b-0 last:pb-0">
+      <label className="text-xs font-medium text-gray-500 block mb-0.5">{label}</label>
+      <div className={`text-sm ${highlight ? 'font-semibold text-blue-700' : 'text-gray-900'}`}>
+        {displayValue || 'N/A'}
+      </div>
+    </div>
+  );
+};
+
+// StatusItem component for status fields with colored indicators
+interface StatusItemProps {
+  label: string;
+  value: string;
+  type?: "success" | "error" | "warning" | "neutral";
+}
+
+// Compact StatusItem component
+const StatusItem: React.FC<StatusItemProps> = ({ label, value, type = "neutral" }) => {
+  const getStatusStyles = () => {
+    switch (type) {
+      case "success":
+        return "text-green-700 bg-green-50 border-green-200";
+      case "error":
+        return "text-red-700 bg-red-50 border-red-200";
+      case "warning":
+        return "text-yellow-700 bg-yellow-50 border-yellow-200";
+      default:
+        return "text-gray-700 bg-gray-50 border-gray-200";
+    }
+  };
+
+  const getStatusIcon = () => {
+    switch (type) {
+      case "success":
+        return "✓";
+      case "error":
+        return "✕";
+      case "warning":
+        return "!";
+      default:
+        return "•";
+    }
+  };
+
+  return (
+    <div className="border-b border-gray-100 pb-2 last:border-b-0 last:pb-0">
+      <label className="text-xs font-medium text-gray-500 block mb-1">{label}</label>
+      <div className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium border ${getStatusStyles()}`}>
+        <span className="mr-1 text-xs">{getStatusIcon()}</span>
+        {value || 'N/A'}
+      </div>
+    </div>
+  );
+};
+
 const Index = () => {
   const { toast } = useToast();
   const location = useLocation();
@@ -1071,8 +1140,7 @@ const Index = () => {
                   <button
                     onClick={() => setIsModalOpen(true)}
                     disabled={!hasScanned || docType !== 'CHECK'}
-                    className="relative group flex items-center justify-center p-2 bg-blue-600 text-white hover:text-gray-100 transition-colors rounded-sm"
-                    title="Other or Advanced"
+                    className="relative group flex items-center justify-center p-2 bg-blue-600 text-white hover:text-gray-100 transition-colors rounded-sm" 
                   >
                     Advanced
                     <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-600 text-white text-[10px] rounded py-0.5 px-1 whitespace-nowrap">
@@ -1401,48 +1469,143 @@ const Index = () => {
             </aside>
           )}
           {isModalOpen && docType === 'CHECK' && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white p-6 rounded-lg shadow-lg max-w-lg w-full">
-                <h2 className="text-lg font-semibold text-gray-700 mb-4">Check Details</h2>
-                <div className="space-y-2">
-                  <p className="text-sm"><strong>Full MICR:</strong> {voucherData.micr || 'N/A'}</p>
-                  <p className="text-sm"><strong>Check Number:</strong> {voucherData.checkNumber || 'N/A'}</p>
-                  <p className="text-sm"><strong>Routing Number:</strong> {voucherData.routingNumber || 'N/A'}</p>
-                  <p className="text-sm"><strong>Account Number:</strong> {voucherData.accountNumber || 'N/A'}</p>
-                  <p className="text-sm"><strong>Bank Code:</strong> {voucherData.bankCode || 'N/A'}</p>
-                  <p className="text-sm"><strong>Account Holder:</strong> {voucherData.accountHolder || 'N/A'}</p>
-                  <p className="text-sm"><strong>Date:</strong> {voucherData.checkDate || 'N/A'}</p>
-                  <p className="text-sm"><strong>Amount:</strong> {voucherData.amount || 'N/A'}</p>
-                  <p className="text-sm"><strong>Amount in Words:</strong> {voucherData.amountWords || 'N/A'}</p>
-                  <p className="text-sm"><strong>Payee Name:</strong> {voucherData.payeeName || 'N/A'}</p>
-                  <p className="text-sm"><strong>Bank Name:</strong> {voucherData.bankName || 'N/A'}</p>
-                  <p className="text-sm"><strong>Bank Branch:</strong> {voucherData.bankBranch || 'N/A'}</p>
-                  <p className="text-sm"><strong>Amount Mismatch:</strong> 
-                    <span className={`font-bold ${voucherData.amountMismatch === "Yes" ? "text-red-600" : (voucherData.amountMismatch === "No" ? "text-green-600" : "text-gray-500")}`}>
-                      {voucherData.amountMismatch || 'N/A'}
-                    </span>
-                  </p>
-                  <p className="text-sm"><strong>Required Signatures:</strong> {voucherData.requiredSignatures || 'N/A'}</p>
-                  <p className="text-sm"><strong>Signatures Present:</strong> {voucherData.signaturesPresent || 'N/A'}</p>
-                  <p className="text-sm"><strong>Signature Status:</strong> 
-                    <span className={`font-bold ${
-                      voucherData.signatureStatus === "INSUFFICIENT" || voucherData.signatureStatus === "NONE" ? "text-red-600" :
-                      (voucherData.signatureStatus === "VALID" ? "text-green-600" : "text-gray-500")
-                    }`}>
-                      {voucherData.signatureStatus || 'N/A'}
-                    </span>
-                  </p>
-                  <p className="text-sm"><strong>Signature:</strong> {voucherData.signature || 'N/A'}</p>
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3">
+    <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[85vh] overflow-hidden border border-gray-200">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Check Details</h2>
+            <p className="text-gray-500 text-xs mt-0.5">Complete check information</p>
+          </div>
+          <div className="bg-blue-100 rounded px-3 py-1 border border-blue-200">
+            <span className="text-blue-800 text-xs font-semibold">CHECK</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-4 overflow-y-auto max-h-[60vh]">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Left Column */}
+          <div className="space-y-3">
+            {/* Check Basic Info */}
+            <div className="bg-white border border-gray-200 rounded-md p-3">
+              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
+                <div className="w-6 h-6 bg-blue-100 rounded-md flex items-center justify-center mr-2">
+                  <svg className="w-3 h-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
                 </div>
-                <button
-                  onClick={() => setIsModalOpen(false)}
-                  className="mt-4 p-2 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded w-full"
-                >
-                  Close
-                </button>
+                Check Information
+              </h3>
+              <div className="space-y-2">
+                <DetailItem label="Check Number" value={voucherData.checkNumber || ''} />
+                <DetailItem label="Amount" value={voucherData.amount || ''} highlight />
+                <DetailItem label="Date" value={voucherData.checkDate || ''} />
+                <DetailItem label="Payee Name" value={voucherData.payeeName || ''} />
               </div>
             </div>
-          )}
+
+            {/* Bank Details */}
+            <div className="bg-white border border-gray-200 rounded-md p-3">
+              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
+                <div className="w-6 h-6 bg-green-100 rounded-md flex items-center justify-center mr-2">
+                  <svg className="w-3 h-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                  </svg>
+                </div>
+                Bank Details
+              </h3>
+              <div className="space-y-2">
+                <DetailItem label="Bank Name" value={voucherData.bankName || ''} />
+                <DetailItem label="Bank Branch" value={voucherData.bankBranch || ''} />
+                <DetailItem label="Bank Code" value={voucherData.bankCode || ''} />
+                <DetailItem label="Routing Number" value={voucherData.routingNumber || ''} />
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column */}
+          <div className="space-y-3">
+            {/* Account Information */}
+            <div className="bg-white border border-gray-200 rounded-md p-3">
+              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
+                <div className="w-6 h-6 bg-purple-100 rounded-md flex items-center justify-center mr-2">
+                  <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                  </svg>
+                </div>
+                Account Information
+              </h3>
+              <div className="space-y-2">
+                <DetailItem label="Account Holder" value={voucherData.accountHolder || ''} />
+                <DetailItem label="Account Number" value={voucherData.accountNumber || ''} secure />
+                <DetailItem label="Full MICR" value={voucherData.micr || ''} />
+              </div>
+            </div>
+
+            {/* Verification Status */}
+            <div className="bg-white border border-gray-200 rounded-md p-3">
+              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
+                <div className="w-6 h-6 bg-orange-100 rounded-md flex items-center justify-center mr-2">
+                  <svg className="w-3 h-3 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                Verification Status
+              </h3>
+              <div className="space-y-2">
+                <StatusItem 
+                  label="Amount Mismatch" 
+                  value={voucherData.amountMismatch || ''} 
+                  type={voucherData.amountMismatch === "Yes" ? "error" : (voucherData.amountMismatch === "No" ? "success" : "neutral")}
+                />
+                <StatusItem 
+                  label="Signature Status" 
+                  value={voucherData.signatureStatus || ''} 
+                  type={
+                    voucherData.signatureStatus === "INSUFFICIENT" || voucherData.signatureStatus === "NONE" ? "error" :
+                    (voucherData.signatureStatus === "VALID" ? "success" : "neutral")
+                  }
+                />
+                <DetailItem label="Required Signatures" value={voucherData.requiredSignatures || ''} />
+                <DetailItem label="Signatures Present" value={voucherData.signaturesPresent || ''} />
+              </div>
+            </div>
+
+            {/* Additional Details */}
+            <div className="bg-white border border-gray-200 rounded-md p-3">
+              <h3 className="text-sm font-semibold text-gray-900 mb-2">Additional Details</h3>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 block mb-1">Amount in Words</label>
+                  <div className="text-gray-800 bg-gray-50 border border-gray-200 rounded p-2 min-h-[60px] text-xs leading-relaxed">
+                    {voucherData.amountWords || 'N/A'}
+                  </div>
+                </div>
+                <DetailItem label="Signature" value={voucherData.signature || ''} />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-gray-200 bg-gray-50 px-4 py-3">
+        <button
+          onClick={() => setIsModalOpen(false)}
+          className="w-full bg-gray-800 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition duration-200 flex items-center justify-center text-sm"
+        >
+          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+          Close Details
+        </button>
+      </div>
+    </div>
+  </div>
+)}
           {isCompareModalOpen && voucherData.frontImage && (
             <div
               className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50"

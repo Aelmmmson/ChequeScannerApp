@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ScannerApi")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2f4daf4b8507da4e5f8d012610eed40572de3e71")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4f6e2aa26d9467dc6c947fba931f4f497b026aa7")]
 [assembly: System.Reflection.AssemblyProductAttribute("ScannerApi")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ScannerApi")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
