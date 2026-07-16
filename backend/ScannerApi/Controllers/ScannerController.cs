@@ -29,7 +29,7 @@ namespace ScannerApi.Controllers
         private readonly string connectionString = "Data Source=10.203.14.169:9534/USGL;User Id=XVSCAN;Password=pass1234;";
         private bool disposed = false;
         private readonly StreamWriter? logWriter;
-        private readonly object logLock = new object();
+        private static readonly object logLock = new object();
         private static DocType m_nDocType = DocType.CHECK;
 
         private enum DocType
@@ -43,21 +43,25 @@ namespace ScannerApi.Controllers
         {
             SetupLogging();
             string logPath = Path.Combine(g_strAppPath, "debug.log");
-            try
+            lock (logLock)
             {
-                if (!Directory.Exists(imageSavePath))
+                try
                 {
-                    Directory.CreateDirectory(imageSavePath);
-                    LogMessage($"Constructor: Created image save directory at {imageSavePath}");
+                    if (!Directory.Exists(imageSavePath))
+                    {
+                        Directory.CreateDirectory(imageSavePath);
+                        LogMessage($"Constructor: Created image save directory at {imageSavePath}");
+                    }
+                    var fileStream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                    logWriter = new StreamWriter(fileStream) { AutoFlush = true };
+                    LogMessage("SetupLogging: Log file initialized at " + logPath);
+                    LogMessage($"Constructor: Initial DocType={m_nDocType}");
                 }
-                logWriter = new StreamWriter(logPath, append: true) { AutoFlush = true };
-                LogMessage("SetupLogging: Log file initialized at " + logPath);
-                LogMessage($"Constructor: Initial DocType={m_nDocType}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to initialize log file or directories: {ex.Message}");
-                LogMessage($"Constructor: Failed to initialize log file or directories: {ex.Message}");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to initialize log file or directories: {ex.Message}");
+                    LogMessage($"Constructor: Failed to initialize log file or directories: {ex.Message}");
+                }
             }
         }
 
@@ -135,7 +139,10 @@ namespace ScannerApi.Controllers
                 {
                     try
                     {
-                        logWriter.Dispose();
+                        lock (logLock)
+                        {
+                            logWriter.Dispose();
+                        }
                     }
                     catch (Exception ex)
                     {

@@ -1,32 +1,25 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\ander\\OneDrive\\Desktop\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj": {}
+    "C:\\Users\\USG\\Downloads\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj": {}
   },
   "projects": {
-    "C:\\Users\\ander\\OneDrive\\Desktop\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj": {
+    "C:\\Users\\USG\\Downloads\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\ander\\OneDrive\\Desktop\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj",
+        "projectUniqueName": "C:\\Users\\USG\\Downloads\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj",
         "projectName": "ScannerApi",
-        "projectPath": "C:\\Users\\ander\\OneDrive\\Desktop\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj",
-        "packagesPath": "C:\\Users\\ander\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\ander\\OneDrive\\Desktop\\ChequeScannerApp\\backend\\ScannerApi\\obj\\",
+        "projectPath": "C:\\Users\\USG\\Downloads\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj",
+        "packagesPath": "C:\\Users\\USG\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\USG\\Downloads\\ChequeScannerApp\\backend\\ScannerApi\\obj\\",
         "projectStyle": "PackageReference",
-        "fallbackFolders": [
-          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
-        ],
         "configFilePaths": [
-          "C:\\Users\\ander\\AppData\\Roaming\\NuGet\\NuGet.Config",
-          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
-          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+          "C:\\Users\\USG\\AppData\\Roaming\\NuGet\\NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net6.0"
         ],
         "sources": {
-          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
-          "C:\\Program Files\\dotnet\\library-packs": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
@@ -39,13 +32,7 @@
           "warnAsError": [
             "NU1605"
           ]
-        },
-        "restoreAuditProperties": {
-          "enableAudit": "true",
-          "auditLevel": "low",
-          "auditMode": "direct"
-        },
-        "SdkAnalysisLevel": "9.0.300"
+        }
       },
       "frameworks": {
         "net6.0": {
@@ -85,19 +72,15 @@
           "warn": true,
           "downloadDependencies": [
             {
-              "name": "Microsoft.AspNetCore.App.Ref",
+              "name": "Microsoft.AspNetCore.App.Runtime.win-x86",
               "version": "[6.0.36, 6.0.36]"
             },
             {
-              "name": "Microsoft.NETCore.App.Host.win-x86",
+              "name": "Microsoft.NETCore.App.Runtime.win-x86",
               "version": "[6.0.36, 6.0.36]"
             },
             {
-              "name": "Microsoft.NETCore.App.Ref",
-              "version": "[6.0.36, 6.0.36]"
-            },
-            {
-              "name": "Microsoft.WindowsDesktop.App.Ref",
+              "name": "Microsoft.WindowsDesktop.App.Runtime.win-x86",
               "version": "[6.0.36, 6.0.36]"
             }
           ],
@@ -109,7 +92,12 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.300\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Users\\USG\\.dotnet_x86\\sdk\\6.0.428\\RuntimeIdentifierGraph.json"
+        }
+      },
+      "runtimes": {
+        "win-x86": {
+          "#import": []
         }
       }
     }
