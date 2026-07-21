@@ -65,6 +65,24 @@ Before running the code, install the following software packages on the target P
      ```
   7. **Restart your backend server** process to ensure it loads the newly registered COM components.
 
+### Step 5: Verify the MagTek API DLL Version
+The backend loads `backend\ScannerApi\mtxmlmcr.dll` before it falls back to the Windows-installed MagTek DLL. If this project-local DLL is older than the installed driver DLL, the API may enumerate only five devices and fail to expose `STX.STX001`.
+
+1. Confirm the installed MagTek x86 DLL exists:
+   ```powershell
+   (Get-Item C:\Windows\SysWOW64\mtxmlmcr.dll).VersionInfo.FileVersion
+   ```
+2. Confirm the project DLL version:
+   ```powershell
+   (Get-Item .\backend\ScannerApi\mtxmlmcr.dll).VersionInfo.FileVersion
+   ```
+3. If the project DLL is older, back it up and replace it with the installed MagTek x86 DLL:
+   ```powershell
+   Copy-Item .\backend\ScannerApi\mtxmlmcr.dll .\backend\ScannerApi\mtxmlmcr.dll.bak
+   Copy-Item C:\Windows\SysWOW64\mtxmlmcr.dll .\backend\ScannerApi\mtxmlmcr.dll -Force
+   ```
+4. Restart the backend and verify `/api/scanner/devices` returns six devices, including `STX.STX001`.
+
 ---
 
 ## 3. Configuration
@@ -95,6 +113,10 @@ Follow these steps to run the backend API and frontend servers side by side:
    dotnet restore
    ```
 4. Build the application for 32-bit (x86) target:
+dotnet build ScannerApi.csproj --configuration Release --runtime win-x86 --self-contained false
+
+
+
    ```cmd
    dotnet build --configuration Release --runtime win-x86
    ```
@@ -165,6 +187,7 @@ Once both servers are running, follow this end-to-end operation workflow:
 | Error Code / Message | Primary Reason | Solution |
 | :--- | :--- | :--- |
 | **Failed to open device (Code 63) or MTMICRGetDevice returns 6** | MSXML 4.0 is missing or not registered in the Windows Registry on this PC. | Follow **Step 4** of the Software Installation section. Make sure to run `regsvr32 C:\Windows\SysWOW64\msxml4.dll` as Administrator, and restart the backend server. |
+| **`/devices` shows only 5 devices and misses `STX.STX001`** | The backend may be loading an older project-local `mtxmlmcr.dll` instead of the installed MagTek x86 DLL. | Follow **Step 5** of the Software Installation section. Back up `backend\ScannerApi\mtxmlmcr.dll`, replace it with `C:\Windows\SysWOW64\mtxmlmcr.dll`, restart the backend, then confirm `/api/scanner/devices` shows 6 devices. |
 | **Device not found (Code -7)** | The scanner is unplugged, powered off, or drivers are missing. | Check USB/Power connection. Reinstall MagTek USB drivers. |
 | **Device Manager Code 39** | Windows Core Isolation is blocking the legacy driver. | Turn **Memory Integrity** to **Off** in Windows Security Settings and restart the PC (see **Step 3**). |
 | **Failed to load DLL or BadImageFormatException** | The backend API is running in 64-bit (x64) mode, but the driver is 32-bit (x86). | Install the **x86 (32-bit)** version of the .NET 6.0 SDK. Rebuild using target `--runtime win-x86`. |
