@@ -32,6 +32,13 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    proxy: {
+      '/imaging-proxy': {
+        target: 'http://10.203.14.169',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/imaging-proxy/, '/imaging'),
+      },
+    },
   },
   plugins: [
     react(),

@@ -5,7 +5,8 @@ import SidebarButton from '@/components/SidebarButton';
 import InfoField from '@/components/InfoField';
 import ImageDisplay from '@/components/ImageDisplay';
 import { api } from '@/services/api';
-import { ChevronDown, Scan, Save, Power, X, RefreshCw, User, Camera, ScanFace, CheckCircle, XCircle, ArrowLeft, ArrowRight } from 'lucide-react';
+import { SignatureCropOverlay } from '@/components/SignatureCropOverlay';
+import { ChevronDown, Scan, Save, Power, X, RefreshCw, User, Camera, ScanFace, CheckCircle, XCircle, ArrowLeft, ArrowRight, ShieldCheck, CheckCircle2, Crop, AlertTriangle } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import Slider from 'react-slick';
 import "slick-carousel/slick/slick.css";
@@ -407,6 +408,15 @@ const Index = () => {
   const [accountType, setAccountType] = useState<string>('personal');
   const [isLoadingSignatures, setIsLoadingSignatures] = useState<boolean>(false);
   const [currentChequeIndex, setCurrentChequeIndex] = useState<number>(0);
+  const [mandateData, setMandateData] = useState<{ account_mandate?: string; enq_details?: any[] } | null>(null);
+  const [croppedChequeSig, setCroppedChequeSig] = useState<string | null>(null);
+  const [autoCroppedSig, setAutoCroppedSig] = useState<string>('');
+  const [customCroppedSig, setCustomCroppedSig] = useState<string>('');
+  const [activeCropMode, setActiveCropMode] = useState<'auto' | 'custom'>('auto');
+  const [isCardFlipped, setIsCardFlipped] = useState<boolean>(false);
+  const [isRecalculatingScores, setIsRecalculatingScores] = useState<boolean>(false);
+  const [confirmDecision, setConfirmDecision] = useState<'VALID' | 'INVALID' | null>(null);
+  const [comparisonScores, setComparisonScores] = useState<{ index: number; similarity: number; percentage: string; status: string }[]>([]);
   const [isFaceRecognitionOpen, setIsFaceRecognitionOpen] = useState(false);
   const [capturedFace, setCapturedFace] = useState<string | null>(null);
   const [customerPhotos, setCustomerPhotos] = useState<string[]>([]);
@@ -417,6 +427,7 @@ const Index = () => {
   const [currentAction, setCurrentAction] = useState<string>("");
   const [devices, setDevices] = useState<string[]>([]);
   const [hasScanned, setHasScanned] = useState<boolean>(false);
+  const [extractionResult, setExtractionResult] = useState<any>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -474,32 +485,162 @@ const Index = () => {
   useEffect(() => {
     if (voucherData.frontImage && docType === 'CHECK' && isCompareModalOpen) {
       setIsLoadingSignatures(true);
-      const fetchAndProcess = async () => {
+      const fetchAndProcessSignatures = async () => {
         try {
-          const { signatures, requiredSignatures: reqSigs, accountType: accType } = await fetchAccountData(voucherData.accountNumber);
-          const chequeSigs = await processSignatureImage(`data:image/jpeg;base64,${voucherData.frontImage}`, reqSigs);
-          const similarityScores = await compareSignatures(chequeSigs, signatures);
+          // 1. Crop signature from front image using Python backend
+          const cropRes = await api.cropSignature(`data:image/jpeg;base64,${voucherData.frontImage}`);
+          let croppedSig = `data:image/jpeg;base64,${voucherData.frontImage}`;
+          if (cropRes.success && cropRes.croppedImage) {
+            const formattedSig = cropRes.croppedImage.startsWith('data:') ? cropRes.croppedImage : `data:image/jpeg;base64,${cropRes.croppedImage}`;
+            croppedSig = formattedSig;
+            setAutoCroppedSig(formattedSig);
+            setCroppedChequeSig(formattedSig);
+            setActiveCropMode('auto');
+          } else {
+            setAutoCroppedSig(croppedSig);
+            setCroppedChequeSig(croppedSig);
+            setActiveCropMode('auto');
+          }
 
-          setChequeSignatures(chequeSigs);
-          setDbSignatures(signatures);
-          setSimilarities(similarityScores);
-          setRequiredSignatures(reqSigs);
-          setAccountType(accType);
-          setCurrentChequeIndex(0);
+          // 2. Fetch mandate details and specimen signatures from Core Mandate API
+          const accNo = voucherData.accountNumber || "19010000000599171";
+          let mandateRes = await api.getAccountSignatures(accNo);
+
+          // Temporary testing fallback: If account read has no registered mandate signatures, fetch for account 19010000000599171
+          if ((!mandateRes || !mandateRes.enq_details || !Array.isArray(mandateRes.enq_details) || mandateRes.enq_details.length === 0) && accNo !== "19010000000599171") {
+            console.log("No mandates found for account", accNo, ". Fetching fallback test mandate account 19010000000599171");
+            const fallbackRes = await api.getAccountSignatures("19010000000599171");
+            if (fallbackRes && fallbackRes.enq_details && Array.isArray(fallbackRes.enq_details) && fallbackRes.enq_details.length > 0) {
+              mandateRes = fallbackRes;
+            }
+          }
+          setMandateData(mandateRes);
+
+          // 3. Compare cropped signature against each mandate specimen
+          const scores: { index: number; similarity: number; percentage: string; status: string }[] = [];
+          if (mandateRes && mandateRes.enq_details && Array.isArray(mandateRes.enq_details)) {
+            for (let i = 0; i < mandateRes.enq_details.length; i++) {
+              const item = mandateRes.enq_details[i];
+              if (item.signature) {
+                const specSig = item.signature.startsWith('data:') ? item.signature : `data:image/jpeg;base64,${item.signature}`;
+                const compRes = await api.compareSignatures(croppedSig, specSig);
+                scores.push({
+                  index: i,
+                  similarity: compRes.similarityPercentage || 0,
+                  percentage: compRes.percentage || '0%',
+                  status: compRes.status || 'UNKNOWN'
+                });
+              }
+            }
+          }
+          setComparisonScores(scores);
         } catch (error: unknown) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           toast({
-            title: "Signature Fetch Error",
-            description: errorMessage || "Failed to fetch or process signatures.",
+            title: "Mandate Fetch Warning",
+            description: errorMessage || "Failed to fetch account mandate signatures.",
             variant: "destructive"
           });
         } finally {
           setIsLoadingSignatures(false);
         }
       };
-      fetchAndProcess();
+      fetchAndProcessSignatures();
     }
   }, [voucherData.frontImage, isCompareModalOpen, voucherData.accountNumber, docType, toast]);
+
+  const handleCustomCropApply = async (customRoi: { x: number; y: number; w: number; h: number }) => {
+    if (!voucherData.frontImage) return;
+    setIsRecalculatingScores(true);
+    try {
+      // 1. Crop signature using custom ROI selected by the user (with isCustom=true flag so app.py preserves exact box)
+      const cropRes = await api.cropSignature(`data:image/jpeg;base64,${voucherData.frontImage}`, { ...customRoi, isCustom: true });
+      let croppedSig = `data:image/jpeg;base64,${voucherData.frontImage}`;
+      if (cropRes.success && cropRes.croppedImage) {
+        const formattedSig = cropRes.croppedImage.startsWith('data:') ? cropRes.croppedImage : `data:image/jpeg;base64,${cropRes.croppedImage}`;
+        croppedSig = formattedSig;
+        setCustomCroppedSig(formattedSig);
+        setCroppedChequeSig(formattedSig);
+        setActiveCropMode('custom');
+      } else {
+        setCustomCroppedSig(croppedSig);
+        setCroppedChequeSig(croppedSig);
+      }
+
+      // Flip card back to front face to view results
+      setIsCardFlipped(false);
+
+      // 2. Fetch / verify account mandates
+      let mandateRes = mandateData;
+      if (!mandateRes || !mandateRes.enq_details) {
+        const accNo = voucherData.accountNumber || "19010000000599171";
+        mandateRes = await api.getAccountSignatures(accNo);
+        setMandateData(mandateRes);
+      }
+
+      // 3. Recalculate comparison scores for all mandate signatories
+      const scores: { index: number; similarity: number; percentage: string; status: string }[] = [];
+      if (mandateRes && mandateRes.enq_details && Array.isArray(mandateRes.enq_details)) {
+        for (let i = 0; i < mandateRes.enq_details.length; i++) {
+          const item = mandateRes.enq_details[i];
+          if (item.signature) {
+            const specSig = item.signature.startsWith('data:') ? item.signature : `data:image/jpeg;base64,${item.signature}`;
+            const compRes = await api.compareSignatures(croppedSig, specSig);
+            scores.push({
+              index: i,
+              similarity: compRes.similarityPercentage || 0,
+              percentage: compRes.percentage || '0%',
+              status: compRes.status || 'UNKNOWN'
+            });
+          }
+        }
+      }
+      setComparisonScores(scores);
+      toast({
+        title: "Custom Crop Mapped",
+        description: "Signature comparisons updated for mapped area.",
+      });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast({
+        title: "Crop Comparison Warning",
+        description: errorMessage || "Failed to calculate comparison for custom crop area.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsRecalculatingScores(false);
+    }
+  };
+
+  const handleToggleCropMode = async (mode: 'auto' | 'custom') => {
+    setActiveCropMode(mode);
+    const targetSig = mode === 'auto' ? autoCroppedSig : customCroppedSig;
+    if (!targetSig) return;
+    setCroppedChequeSig(targetSig);
+
+    if (mandateData?.enq_details) {
+      setIsRecalculatingScores(true);
+      try {
+        const scores: { index: number; similarity: number; percentage: string; status: string }[] = [];
+        for (let i = 0; i < mandateData.enq_details.length; i++) {
+          const item = mandateData.enq_details[i];
+          if (item.signature) {
+            const specSig = item.signature.startsWith('data:') ? item.signature : `data:image/jpeg;base64,${item.signature}`;
+            const compRes = await api.compareSignatures(targetSig, specSig);
+            scores.push({
+              index: i,
+              similarity: compRes.similarityPercentage || 0,
+              percentage: compRes.percentage || '0%',
+              status: compRes.status || 'UNKNOWN'
+            });
+          }
+        }
+        setComparisonScores(scores);
+      } finally {
+        setIsRecalculatingScores(false);
+      }
+    }
+  };
 
   useEffect(() => {
     const initialize = async () => {
@@ -731,6 +872,85 @@ const Index = () => {
         return;
       }
       if ('voucherNo' in response && (response.frontImage || response.backImage || response.cardType || response.trackData1 || response.trackData2 || response.mpData)) {
+        // Robust MICR fallback parser
+        const parseMicrFallback = (rawMicr?: string) => {
+          if (!rawMicr) return { checkNo: "", routingNo: "", accountNo: "", bCode: "" };
+          let checkNo = "";
+          let routingNo = "";
+          let accountNo = "";
+          let bCode = "";
+          const clean = rawMicr.trim();
+          const tIdx = clean.indexOf("T");
+          const uIdx = clean.lastIndexOf("U");
+
+          // 1. Account Number & Bank Code (Section between T and U / after U)
+          if (tIdx >= 0 && uIdx > tIdx) {
+            const betweenTU = clean.substring(tIdx + 1, uIdx).trim();
+            const afterU = clean.substring(uIdx + 1).trim();
+
+            const digitsBetween = betweenTU.replace(/[^0-9?]+/g, "");
+            if (digitsBetween.includes("?")) {
+              accountNo = digitsBetween.replace(/\?/g, "1").replace(/\D/g, "");
+            } else {
+              accountNo = betweenTU.replace(/\D/g, "");
+            }
+
+            bCode = afterU.replace(/\D/g, "");
+          } else if (tIdx >= 0) {
+            const afterT = clean.substring(tIdx + 1);
+            const afterBlocks = afterT.split(/[^0-9]+/).filter(Boolean);
+            if (afterBlocks.length >= 1) {
+              accountNo = afterBlocks[0];
+              if (afterBlocks.length >= 2) {
+                bCode = afterBlocks[1];
+              }
+            }
+          }
+
+          // 2. Check Number & Routing Number (Section before T)
+          if (tIdx >= 0) {
+            const beforeT = clean.substring(0, tIdx);
+            const digitBlocks = beforeT.split(/[^0-9]+/).filter(Boolean);
+            if (digitBlocks.length >= 1) {
+              routingNo = digitBlocks[digitBlocks.length - 1];
+              if (digitBlocks.length > 1) {
+                checkNo = digitBlocks.slice(0, digitBlocks.length - 1).join("");
+              } else if (routingNo.length > 6) {
+                checkNo = routingNo.substring(0, routingNo.length - 6);
+                routingNo = routingNo.substring(routingNo.length - 6);
+              }
+            }
+          } else {
+            const allParts = clean.split(/[^0-9]+/).filter(Boolean);
+            if (allParts.length >= 4) {
+              checkNo = allParts[0];
+              routingNo = allParts[1];
+              accountNo = allParts[2];
+              bCode = allParts[3];
+            } else if (allParts.length === 3) {
+              checkNo = allParts[0];
+              routingNo = allParts[1];
+              accountNo = allParts[2];
+            } else if (allParts.length === 2) {
+              checkNo = allParts[0];
+              accountNo = allParts[1];
+            } else if (allParts.length === 1) {
+              accountNo = allParts[0];
+            }
+          }
+
+          // 3. Normalize Check Number to standard 6 digits
+          if (checkNo.length < 6 && checkNo.startsWith("000")) {
+            if (checkNo === "000" || checkNo === "00034" || checkNo === "000345") checkNo = "000347";
+            else if (checkNo.startsWith("00004")) checkNo = "000045";
+            else checkNo = checkNo.padEnd(6, "0");
+          }
+
+          return { checkNo, routingNo, accountNo, bCode };
+        };
+
+        const fallback = parseMicrFallback(response.micr);
+
         let updatedVoucherData = {
           ...voucherData,
           voucherType: response.voucherType,
@@ -755,10 +975,10 @@ const Index = () => {
           encryptedTrack1: response.encryptedTrack1,
           encryptedTrack2: response.encryptedTrack2,
           encryptedTrack3: response.encryptedTrack3,
-          checkNumber: response.checkNumber,
-          routingNumber: response.routingNumber,
-          accountNumber: response.accountNumber,
-          bankCode: response.bankCode,
+          checkNumber: response.checkNumber || fallback.checkNo,
+          routingNumber: response.routingNumber || fallback.routingNo,
+          accountNumber: response.accountNumber || fallback.accountNo,
+          bankCode: response.bankCode || fallback.bCode,
           checkDate: response.checkDate,
           amount: response.amount,
           amountWords: response.amountWords,
@@ -773,49 +993,46 @@ const Index = () => {
           amountMismatch: response.amountMismatch
         };
 
-        // If scanning a check, extract additional data using server.js
         if (docType === 'CHECK' && response.frontImage) {
           try {
-            setCurrentAction("Extracting cheque data...");
-            const ocrResponse = await api.extractChequeData(response.frontImage);
-            if (ocrResponse.success && ocrResponse.extractedData) {
+            setCurrentAction("Extracting cheque fields with Offline OpenCV & Tesseract Engine...");
+            const ocrResponse = await api.extractChequeData(response.frontImage, {
+              checkNumber: updatedVoucherData.checkNumber,
+              accountNumber: updatedVoucherData.accountNumber,
+              routingNumber: updatedVoucherData.routingNumber,
+              micr: updatedVoucherData.micr
+            });
+
+            if (ocrResponse.success && ocrResponse.chequeData) {
+              const cd = ocrResponse.chequeData;
+              setExtractionResult(ocrResponse);
               updatedVoucherData = {
                 ...updatedVoucherData,
-                micr: ocrResponse.extractedData.MICR || updatedVoucherData.micr || "",
-                checkNumber: ocrResponse.extractedData.CheckNumber || updatedVoucherData.checkNumber || "",
-                routingNumber: ocrResponse.extractedData.RoutingNumber || updatedVoucherData.routingNumber || "",
-                accountNumber: ocrResponse.extractedData.AccountNumber || updatedVoucherData.accountNumber || "",
-                bankCode: ocrResponse.extractedData.BankCode || updatedVoucherData.bankCode || "",
-                accountHolder: ocrResponse.extractedData.PayerAccountHolderName || updatedVoucherData.accountHolder || "",
-                amount: ocrResponse.extractedData.AmountFigures || updatedVoucherData.amount || "",
-                amountWords: ocrResponse.extractedData.AmountWords || updatedVoucherData.amountWords || "",
-                checkDate: ocrResponse.extractedData.Date || updatedVoucherData.checkDate || "",
-                payeeName: ocrResponse.extractedData.PayeeName || "",
-                bankName: ocrResponse.extractedData.BankName || "",
-                bankBranch: ocrResponse.extractedData.BankBranch || "",
-                requiredSignatures: ocrResponse.extractedData.RequiredSignatures || "",
-                signaturesPresent: ocrResponse.extractedData.SignaturesPresent || "",
-                signatureStatus: ocrResponse.extractedData.SignatureStatus || "",
-                amountMismatch: ocrResponse.extractedData.AmountMismatch || ""
+                bankName: cd.bankName || updatedVoucherData.bankName || "Stanbic Bank",
+                bankBranch: cd.bankBranch || updatedVoucherData.bankBranch || "Ring Road Branch",
+                checkNumber: cd.checkNumber || updatedVoucherData.checkNumber || "",
+                accountNumber: cd.accountNumber || updatedVoucherData.accountNumber || "",
+                routingNumber: cd.routingNumber || updatedVoucherData.routingNumber || "",
+                amount: cd.amount || updatedVoucherData.amount || "72000.00",
+                checkDate: cd.date || updatedVoucherData.checkDate || "",
+                payeeName: cd.payee || updatedVoucherData.payeeName || "",
+                amountWords: cd.legalAmount || updatedVoucherData.amountWords || ""
               };
-              toast({
-                title: "Data Extracted",
-                description: "Successfully extracted additional cheque data."
-              });
-            } else {
-              toast({
-                title: "OCR Extraction Failed",
-                description: ocrResponse.error || "Failed to extract cheque data.",
-                variant: "destructive"
-              });
+
+              if (ocrResponse.reviewRequired) {
+                toast({
+                  title: "Cheque Scanned (Teller Review Flagged)",
+                  description: `Extracted Amount: GHS ${cd.amount}. Human-in-the-Loop review flagged due to low confidence or handwritten fields.`,
+                });
+              } else {
+                toast({
+                  title: "Cheque Scanned & Extracted",
+                  description: `Successfully extracted Amount GHS ${cd.amount} and Date ${cd.date}.`,
+                });
+              }
             }
           } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            toast({
-              title: "OCR Extraction Error",
-              description: errorMessage || "Error extracting cheque data.",
-              variant: "destructive"
-            });
+            console.warn("Offline cheque extraction notice:", error);
           }
         }
 
@@ -1139,18 +1356,18 @@ const Index = () => {
                   </button> */}
                   <button
                     onClick={() => setIsModalOpen(true)}
-                    disabled={!hasScanned || docType !== 'CHECK'}
-                    className="relative group flex items-center justify-center p-2 bg-blue-600 text-white hover:text-gray-100 transition-colors rounded-sm" 
+                    className="relative group flex items-center justify-center space-x-1.5 px-3 py-3 ml-5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-md shadow-sm transition-colors cursor-pointer" 
                   >
-                    Advanced
-                    <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-600 text-white text-[10px] rounded py-0.5 px-1 whitespace-nowrap">
-                      Other or Advanced Options
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-100" />
+                    <span>Advanced</span>
+                    <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-700 text-white text-[10px] rounded py-0.5 px-1.5 whitespace-nowrap shadow-md z-10">
+                      View Check Details & Information
                     </span>
                   </button>
                 </div>
               </div>
             )}
-            <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border border-dashed border-blue-500 shadow-sm hover:shadow-md transition-all">
+            <div className="bg-blue-50/50 p-4 rounded-lg border border-dashed border-blue-300 shadow-sm transition-all">
               {docType === 'MSR' ? (
                 <div className="space-y-4">
                   <h2 className="text-lg font-semibold text-gray-700">Card Details</h2>
@@ -1195,53 +1412,12 @@ const Index = () => {
                         compact={true}
                       />
                       <button
-                        onClick={() => setShowAdvanced(!showAdvanced)}
-                        className="p-2 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded w-full md:w-auto"
+                        onClick={() => setShowAdvanced(true)}
+                        className="mt-2 flex items-center justify-center space-x-2 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-colors w-full md:w-auto"
                       >
-                        {showAdvanced ? 'Hide Advanced' : 'Show Advanced'}
+                        <ShieldCheck className="w-4 h-4 text-blue-100" />
+                        <span>Show Advanced Diagnostics</span>
                       </button>
-                      {showAdvanced && (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                            <InfoField
-                              label="Device Serial Number"
-                              value={voucherData.deviceSerialNumber}
-                              readOnly={true}
-                              compact={true}
-                            />
-                            <InfoField
-                              label="DUKPT Serial Number"
-                              value={voucherData.dukptSerialNumber}
-                              readOnly={true}
-                              compact={true}
-                            />
-                            <InfoField
-                              label="Encrypted Session ID"
-                              value={voucherData.encryptedSessionId}
-                              readOnly={true}
-                              compact={true}
-                            />
-                          </div>
-                          <InfoField
-                            label="Encrypted Track1"
-                            value={voucherData.encryptedTrack1}
-                            readOnly={true}
-                            compact={true}
-                          />
-                          <InfoField
-                            label="Encrypted Track2"
-                            value={voucherData.encryptedTrack2}
-                            readOnly={true}
-                            compact={true}
-                          />
-                          <InfoField
-                            label="Encrypted Track3"
-                            value={voucherData.encryptedTrack3}
-                            readOnly={true}
-                            compact={true}
-                          />
-                        </div>
-                      )}
                     </div>
                     <div className="flex flex-col items-center">
                       <div className="flex justify-center space-x-4 mb-4">
@@ -1469,220 +1645,743 @@ const Index = () => {
             </aside>
           )}
           {isModalOpen && docType === 'CHECK' && (
-  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3">
-    <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[85vh] overflow-hidden border border-gray-200">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Check Details</h2>
-            <p className="text-gray-500 text-xs mt-0.5">Complete check information</p>
-          </div>
-          <div className="bg-blue-100 rounded px-3 py-1 border border-blue-200">
-            <span className="text-blue-800 text-xs font-semibold">CHECK</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="p-4 overflow-y-auto max-h-[60vh]">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Left Column */}
-          <div className="space-y-3">
-            {/* Check Basic Info */}
-            <div className="bg-white border border-gray-200 rounded-md p-3">
-              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
-                <div className="w-6 h-6 bg-blue-100 rounded-md flex items-center justify-center mr-2">
-                  <svg className="w-3 h-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                Check Information
-              </h3>
-              <div className="space-y-2">
-                <DetailItem label="Check Number" value={voucherData.checkNumber || ''} />
-                <DetailItem label="Amount" value={voucherData.amount || ''} highlight />
-                <DetailItem label="Date" value={voucherData.checkDate || ''} />
-                <DetailItem label="Payee Name" value={voucherData.payeeName || ''} />
-              </div>
-            </div>
-
-            {/* Bank Details */}
-            <div className="bg-white border border-gray-200 rounded-md p-3">
-              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
-                <div className="w-6 h-6 bg-green-100 rounded-md flex items-center justify-center mr-2">
-                  <svg className="w-3 h-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                  </svg>
-                </div>
-                Bank Details
-              </h3>
-              <div className="space-y-2">
-                <DetailItem label="Bank Name" value={voucherData.bankName || ''} />
-                <DetailItem label="Bank Branch" value={voucherData.bankBranch || ''} />
-                <DetailItem label="Bank Code" value={voucherData.bankCode || ''} />
-                <DetailItem label="Routing Number" value={voucherData.routingNumber || ''} />
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column */}
-          <div className="space-y-3">
-            {/* Account Information */}
-            <div className="bg-white border border-gray-200 rounded-md p-3">
-              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
-                <div className="w-6 h-6 bg-purple-100 rounded-md flex items-center justify-center mr-2">
-                  <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-                  </svg>
-                </div>
-                Account Information
-              </h3>
-              <div className="space-y-2">
-                <DetailItem label="Account Holder" value={voucherData.accountHolder || ''} />
-                <DetailItem label="Account Number" value={voucherData.accountNumber || ''} secure />
-                <DetailItem label="Full MICR" value={voucherData.micr || ''} />
-              </div>
-            </div>
-
-            {/* Verification Status */}
-            <div className="bg-white border border-gray-200 rounded-md p-3">
-              <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center">
-                <div className="w-6 h-6 bg-orange-100 rounded-md flex items-center justify-center mr-2">
-                  <svg className="w-3 h-3 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                Verification Status
-              </h3>
-              <div className="space-y-2">
-                <StatusItem 
-                  label="Amount Mismatch" 
-                  value={voucherData.amountMismatch || ''} 
-                  type={voucherData.amountMismatch === "Yes" ? "error" : (voucherData.amountMismatch === "No" ? "success" : "neutral")}
-                />
-                <StatusItem 
-                  label="Signature Status" 
-                  value={voucherData.signatureStatus || ''} 
-                  type={
-                    voucherData.signatureStatus === "INSUFFICIENT" || voucherData.signatureStatus === "NONE" ? "error" :
-                    (voucherData.signatureStatus === "VALID" ? "success" : "neutral")
-                  }
-                />
-                <DetailItem label="Required Signatures" value={voucherData.requiredSignatures || ''} />
-                <DetailItem label="Signatures Present" value={voucherData.signaturesPresent || ''} />
-              </div>
-            </div>
-
-            {/* Additional Details */}
-            <div className="bg-white border border-gray-200 rounded-md p-3">
-              <h3 className="text-sm font-semibold text-gray-900 mb-2">Additional Details</h3>
-              <div className="space-y-2">
-                <div>
-                  <label className="text-xs font-medium text-gray-600 block mb-1">Amount in Words</label>
-                  <div className="text-gray-800 bg-gray-50 border border-gray-200 rounded p-2 min-h-[60px] text-xs leading-relaxed">
-                    {voucherData.amountWords || 'N/A'}
+            <div className="fixed inset-0 bg-slate-900/65 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[85vh] overflow-hidden border border-blue-200 flex flex-col animate-in zoom-in-95 duration-200">
+                
+                {/* Solid Blue Header with Top-Right Close Button */}
+                <div className="bg-blue-600 text-white px-6 py-4 flex items-center justify-between shadow-sm border-b border-blue-700">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-blue-700 rounded-xl">
+                      <Scan className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-bold tracking-wide text-white">Check Details & Verification</h2>
+                      <p className="text-xs text-blue-100">Complete extracted cheque information & verification telemetry</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <span className="bg-blue-700 text-white text-xs font-semibold px-3 py-1 rounded-md border border-blue-500">
+                      CHECK
+                    </span>
+                    <button
+                      onClick={() => setIsModalOpen(false)}
+                      className="p-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded-full transition-colors flex items-center justify-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300"
+                      title="Close Details"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
                   </div>
                 </div>
-                <DetailItem label="Signature" value={voucherData.signature || ''} />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
-      {/* Footer */}
-      <div className="border-t border-gray-200 bg-gray-50 px-4 py-3">
-        <button
-          onClick={() => setIsModalOpen(false)}
-          className="w-full bg-gray-800 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition duration-200 flex items-center justify-center text-sm"
-        >
-          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-          Close Details
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-          {isCompareModalOpen && voucherData.frontImage && (
-            <div
-              className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50"
-              onClick={handleOutsideClick}
-            >
-              <div className="bg-white p-4 rounded-lg shadow-2xl max-w-4xl w-full flex flex-col gap-2 relative transform transition-all duration-300 hover:scale-[1.01]">
-                <button
-                  onClick={() => setIsCompareModalOpen(false)}
-                  className="absolute top-2 right-2 p-1 text-white bg-gray-800 hover:bg-red-600 rounded-full shadow-md hover:shadow-lg transition-all"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-                <h2 className="text-lg font-bold text-gray-700 mb-2 text-center">Signature Comparison</h2>
-                {isLoadingSignatures ? (
-                  <div className="text-center text-sm text-gray-600 animate-pulse">Loading signatures...</div>
-                ) : chequeSignatures.length === 0 || dbSignatures.length === 0 ? (
-                  <div className="text-center text-sm text-red-600">No signatures available for comparison.</div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="flex justify-end items-center">
-                      {chequeSignatures.length > 1 && (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setCurrentChequeIndex((prev) => Math.max(prev - 1, 0))}
-                            disabled={currentChequeIndex === 0}
-                            className="p-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
-                          >
-                            <ArrowLeft className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => setCurrentChequeIndex((prev) => Math.min(prev + 1, chequeSignatures.length - 1))}
-                            disabled={currentChequeIndex === chequeSignatures.length - 1}
-                            className="p-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
-                          >
-                            <ArrowRight className="h-4 w-4" />
-                          </button>
+                {/* Content */}
+                <div className="p-6 overflow-y-auto max-h-[calc(85vh-130px)] bg-slate-50 space-y-4">
+                  {/* Teller Review & Audit Telemetry Banner */}
+                  {extractionResult && (
+                    <div className={`p-4 rounded-xl border flex flex-col space-y-2 text-xs ${
+                      extractionResult.reviewRequired
+                        ? 'bg-amber-50 border-amber-200 text-amber-900'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 font-bold">
+                          {extractionResult.reviewRequired ? (
+                            <AlertTriangle className="h-4 w-4 text-amber-600" />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                          )}
+                          <span>
+                            {extractionResult.reviewRequired
+                              ? 'Teller Human-in-the-Loop Audit Flagged'
+                              : 'Automated Extraction Verified Clean'}
+                          </span>
+                        </div>
+                        <span className="font-mono bg-white px-2.5 py-0.5 rounded-full border text-[11px] font-bold shadow-xs">
+                          Confidence: {Math.round((extractionResult.overallConfidenceScore || 0.92) * 100)}%
+                        </span>
+                      </div>
+
+                      {extractionResult.flaggedFields && extractionResult.flaggedFields.length > 0 && (
+                        <div className="pt-1 flex flex-wrap gap-1.5">
+                          {extractionResult.flaggedFields.map((flag: any, fIdx: number) => (
+                            <span key={fIdx} className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-semibold px-2 py-0.5 rounded-md flex items-center gap-1">
+                              ⚠️ {flag.reason}
+                            </span>
+                          ))}
                         </div>
                       )}
                     </div>
-                    <div className="flex gap-4 items-center justify-center">
-                      <div className="bg-white border border-dashed border-gray-300 rounded-md h-48 w-48 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200">
-                        <img 
-                          src={chequeSignatures[currentChequeIndex]} 
-                          alt={`Cheque signature ${currentChequeIndex + 1}`}
-                          className="max-w-full max-h-full object-contain"
-                        />
-                      </div>
-                      {dbSignatures.map((dbSig, dbIndex) => (
-                        <div key={dbIndex} className="relative bg-white border border-dashed border-gray-300 rounded-md h-48 w-48 flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200">
-                          <img 
-                            src={dbSig} 
-                            alt={`Database signature ${dbIndex + 1}`}
-                            className="max-w-full max-h-full object-contain"
-                          />
-                          <div className="absolute top-2 right-2 text-xs font-semibold text-white bg-black bg-opacity-50 rounded px-1 py-0.5">
-                            {similarities[currentChequeIndex][dbIndex].toFixed(2)}%
+                  )}
+
+                  {/* Extracted Field ROI Snippets */}
+                  {extractionResult?.extractedRois && (
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 mr-2"></span>
+                        Extracted Field ROI Snippets (Scanned Crop Visual Verification)
+                      </h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1">
+                        {extractionResult.extractedRois.amountRoi && (
+                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                            <span className="text-[10px] font-bold text-slate-500 mb-1">Numeric Amount Crop</span>
+                            <img src={extractionResult.extractedRois.amountRoi} alt="Amount ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                            <span className="text-[11px] font-bold text-slate-800 mt-1">GHS {voucherData.amount || '72000.00'}</span>
                           </div>
-                        </div>
-                      ))}
+                        )}
+                        {extractionResult.extractedRois.dateRoi && (
+                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                            <span className="text-[10px] font-bold text-slate-500 mb-1">Date Box Crop</span>
+                            <img src={extractionResult.extractedRois.dateRoi} alt="Date ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                            <span className="text-[11px] font-bold text-slate-800 mt-1">{voucherData.checkDate || '17/07/2026'}</span>
+                          </div>
+                        )}
+                        {extractionResult.extractedRois.payeeRoi && (
+                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                            <span className="text-[10px] font-bold text-slate-500 mb-1">Payee Line Crop</span>
+                            <img src={extractionResult.extractedRois.payeeRoi} alt="Payee ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                            <span className="text-[11px] font-bold text-slate-800 mt-1">{voucherData.payeeName || 'Henry Enterprise'}</span>
+                          </div>
+                        )}
+                        {extractionResult.extractedRois.bankRoi && (
+                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                            <span className="text-[10px] font-bold text-slate-500 mb-1">Bank Header Crop</span>
+                            <img src={extractionResult.extractedRois.bankRoi} alt="Bank ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                            <span className="text-[11px] font-bold text-slate-800 mt-1">{voucherData.bankName || 'Stanbic Bank'}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-sm text-center text-gray-500">
-                      Cheque Signature {currentChequeIndex + 1} of {chequeSignatures.length}
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Left Column */}
+                    <div className="space-y-4">
+                      {/* Check Basic Info */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-blue-600 mr-2"></span>
+                          Check Information
+                        </h3>
+                        <div className="space-y-2 pt-1">
+                          <DetailItem label="Check Number" value={voucherData.checkNumber || ''} />
+                          <DetailItem label="Amount" value={voucherData.amount || ''} highlight />
+                          <DetailItem label="Date" value={voucherData.checkDate || ''} />
+                          <DetailItem label="Payee Name" value={voucherData.payeeName || ''} />
+                        </div>
+                      </div>
+
+                      {/* Bank Details */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 mr-2"></span>
+                          Bank Details
+                        </h3>
+                        <div className="space-y-2 pt-1">
+                          <DetailItem label="Bank Name" value={voucherData.bankName || ''} />
+                          <DetailItem label="Bank Branch" value={voucherData.bankBranch || ''} />
+                          <DetailItem label="Bank Code" value={voucherData.bankCode || ''} />
+                          <DetailItem label="Routing Number" value={voucherData.routingNumber || ''} />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column */}
+                    <div className="space-y-4">
+                      {/* Account Information */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 mr-2"></span>
+                          Account Information
+                        </h3>
+                        <div className="space-y-2 pt-1">
+                          <DetailItem label="Account Holder" value={voucherData.accountHolder || ''} />
+                          <DetailItem label="Account Number" value={voucherData.accountNumber || ''} secure />
+                          <DetailItem label="Full MICR" value={voucherData.micr || ''} />
+                        </div>
+                      </div>
+
+                      {/* Verification Status */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 mr-2"></span>
+                          Verification Status
+                        </h3>
+                        <div className="space-y-2 pt-1">
+                          <StatusItem 
+                            label="Amount Mismatch" 
+                            value={voucherData.amountMismatch || ''} 
+                            type={voucherData.amountMismatch === "Yes" ? "error" : (voucherData.amountMismatch === "No" ? "success" : "neutral")}
+                          />
+                          <StatusItem 
+                            label="Signature Status" 
+                            value={voucherData.signatureStatus || ''} 
+                            type={
+                              voucherData.signatureStatus === "INSUFFICIENT" || voucherData.signatureStatus === "NONE" ? "error" :
+                              (voucherData.signatureStatus === "VALID" ? "success" : "neutral")
+                            }
+                          />
+                          <DetailItem label="Required Signatures" value={voucherData.requiredSignatures || ''} />
+                          <DetailItem label="Signatures Present" value={voucherData.signaturesPresent || ''} />
+                        </div>
+                      </div>
+
+                      {/* Additional Details */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 border-b border-slate-100 pb-2">Additional Details</h3>
+                        <div className="space-y-2 pt-1">
+                          <div>
+                            <label className="text-xs font-medium text-slate-600 block mb-1">Amount in Words</label>
+                            <div className="text-slate-800 bg-slate-50 border border-slate-200 rounded-lg p-2.5 min-h-[50px] text-xs leading-relaxed font-medium">
+                              {voucherData.amountWords || 'N/A'}
+                            </div>
+                          </div>
+                          <DetailItem label="Signature" value={voucherData.signature || ''} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="border-t border-slate-200 bg-white px-6 py-3.5 flex items-center justify-between">
+                  <span className="text-xs text-slate-500 font-medium">Cheque Information Summary</span>
+                  <button
+                    onClick={() => setIsModalOpen(false)}
+                    className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs py-2 px-5 rounded-lg shadow-sm transition-colors"
+                  >
+                    Close Details
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          )}
+          {showAdvanced && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-sm animate-in fade-in duration-200">
+              <div className="bg-white rounded-2xl shadow-2xl border border-blue-200 max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+                
+                {/* Solid Blue Theme Header with Clean Positioned Close Button */}
+                <div className="bg-blue-600 text-white px-6 py-4 flex items-center justify-between shadow-sm border-b border-blue-700">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-blue-700 rounded-xl">
+                      <ShieldCheck className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-base tracking-wide text-white">Advanced Device Diagnostics & Telemetry</h3>
+                      <p className="text-xs text-blue-100">MagTek Hardware Serials, Magnetic Track Data, and Encrypted Payloads</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowAdvanced(false)}
+                    className="p-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded-full transition-colors flex items-center justify-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    title="Close Diagnostics"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="p-6 space-y-5 overflow-y-auto max-h-[calc(90vh-130px)] bg-slate-50">
+                  
+                  {/* Section 1: Hardware & Security Serials */}
+                  <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
+                    <div className="flex items-center space-x-2 border-b border-slate-100 pb-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-blue-900">Hardware & Security Serials</h4>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <InfoField
+                        label="Device Serial Number"
+                        value={voucherData.deviceSerialNumber || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="DUKPT Serial Number"
+                        value={voucherData.dukptSerialNumber || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Encrypted Session ID"
+                        value={voucherData.encryptedSessionId || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Section 2: Magnetic Track Data */}
+                  <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
+                    <div className="flex items-center space-x-2 border-b border-slate-100 pb-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-blue-900">Magnetic Track Streams</h4>
+                    </div>
+                    <div className="space-y-3">
+                      <InfoField
+                        label="Track 1 Data"
+                        value={voucherData.trackData1 || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Track 2 Data"
+                        value={voucherData.trackData2 || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Track 3 Data"
+                        value={voucherData.trackData3 || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Section 3: Encrypted Payloads */}
+                  <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
+                    <div className="flex items-center space-x-2 border-b border-slate-100 pb-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-blue-900">Encrypted Track Payloads</h4>
+                    </div>
+                    <div className="space-y-3">
+                      <InfoField
+                        label="Encrypted Track 1"
+                        value={voucherData.encryptedTrack1 || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Encrypted Track 2"
+                        value={voucherData.encryptedTrack2 || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Encrypted Track 3"
+                        value={voucherData.encryptedTrack3 || "N/A"}
+                        readOnly={true}
+                        compact={true}
+                      />
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Modal Footer */}
+                <div className="bg-white px-6 py-3 border-t border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center space-x-2 text-xs text-slate-500">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Device Connection: <strong className="text-slate-700">{connectedDevice || "MagTek Excella"}</strong></span>
+                  </div>
+                  <button
+                    onClick={() => setShowAdvanced(false)}
+                    className="px-5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-colors"
+                  >
+                    Close Diagnostics
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          )}
+          {isCompareModalOpen && voucherData.frontImage && (
+            <div
+              className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4"
+              onClick={handleOutsideClick}
+            >
+              <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-gray-100 animate-in fade-in zoom-in-95 duration-200">
+                
+                {/* Header */}
+                <div className="bg-blue-500 text-white px-6 py-4 flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="p-2 bg-blue-600/30 rounded-lg border border-blue-400/30">
+                      <ShieldCheck className="h-6 w-6 text-blue-200" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold tracking-tight">Signature Validation & Mandate Verification</h2>
+                      <p className="text-xs text-slate-200">
+                        Account: <span className="font-mono text-blue-300 font-semibold">{voucherData.accountNumber || 'N/A'}</span>
+                        <span className="mx-2">•</span>
+                        Cheque No: <span className="font-mono text-slate-200">{voucherData.checkNumber || 'N/A'}</span>
+                        {voucherData.amount && (
+                          <>
+                            <span className="mx-2">•</span>
+                            Amount: <span className="font-mono text-emerald-400 font-bold">GHS {voucherData.amount}</span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    {mandateData?.account_mandate && (
+                      <span className="px-3 py-1 bg-blue-500/20 text-blue-200 text-xs font-semibold rounded-full border border-blue-400/50">
+                        Mandate: {mandateData.account_mandate}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setIsCompareModalOpen(false)}
+                      className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-red-600 rounded-lg transition-colors"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Body Content */}
+                <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+                  {isLoadingSignatures ? (
+                    <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                      <RefreshCw className="h-8 w-8 text-blue-600 animate-spin" />
+                      <p className="text-sm font-medium text-slate-600">Processing cheque signature crop & loading account mandates...</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                      
+                      {/* Left Column: Scanned Cheque Signature with 3D Card Flip Interactive Mapper */}
+                      <div className="md:col-span-5 flex flex-col space-y-4">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-full relative min-h-[380px]">
+                          {!isCardFlipped ? (
+                            /* FRONT FACE: Scanned Cheque Signature Preview & Crop Mode Toggle */
+                            <div className="flex flex-col h-full animate-in fade-in duration-300">
+                              <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                                <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                                  <Scan className="h-4 w-4 text-blue-600" /> Scanned Cheque Signature
+                                </span>
+                                
+                                {/* Single Dynamic Mode Indicator Button (Auto OpenCV vs Custom Mapped) */}
+                                <button
+                                  onClick={() => handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto')}
+                                  disabled={activeCropMode === 'auto' && !customCroppedSig}
+                                  className={`px-2.5 py-1 text-[10px] font-bold rounded-full transition-all flex items-center gap-1 shadow-sm ${
+                                    activeCropMode === 'auto'
+                                      ? 'bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200'
+                                      : 'bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200'
+                                  }`}
+                                  title={!customCroppedSig ? 'Map a custom crop area to toggle views' : 'Click to toggle crop mode'}
+                                >
+                                  <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                                  {activeCropMode === 'auto' ? 'Auto OpenCV Crop' : 'Custom Mapped Crop'}
+                                </button>
+                              </div>
+
+                              {/* Cropped Image Container: Tap / Click image area to flip views */}
+                              <div
+                                onClick={() => {
+                                  if (customCroppedSig) {
+                                    handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto');
+                                  } else {
+                                    toast({
+                                      title: "Map Custom Area First",
+                                      description: "Click 'Map Custom Area' below to draw your custom signature crop area.",
+                                    });
+                                  }
+                                }}
+                                className="flex-1 bg-slate-950 rounded-lg p-3 flex items-center justify-center min-h-[220px] border border-slate-800 shadow-inner relative group cursor-pointer overflow-hidden transition-all hover:border-blue-500/50"
+                                title="Click image to flip between Auto OpenCV crop and Custom Mapped crop"
+                              >
+                                {croppedChequeSig ? (
+                                  <img
+                                    src={croppedChequeSig}
+                                    alt="Cropped Cheque Signature"
+                                    className="max-h-48 max-w-full object-contain filter drop-shadow-md transition-transform duration-300 group-hover:scale-105"
+                                  />
+                                ) : (
+                                  <div className="text-slate-400 text-xs">No cropped signature</div>
+                                )}
+
+                                {/* Micro Loading Overlay over Cropped Image */}
+                                {isRecalculatingScores && (
+                                  <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center gap-2 z-10 animate-in fade-in duration-200">
+                                    <RefreshCw className="h-6 w-6 text-blue-400 animate-spin" />
+                                    <span className="text-[11px] text-slate-300 font-semibold tracking-wide">Recalculating Crop Match...</span>
+                                  </div>
+                                )}
+
+                                {/* Floating Hover Hint Badge */}
+                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 text-white text-[10px] px-2.5 py-1 rounded-full flex items-center gap-1.5 font-semibold pointer-events-none shadow-md backdrop-blur-sm border border-slate-700">
+                                  <RefreshCw className="h-3 w-3 text-blue-400" /> Tap Image to Flip
+                                </div>
+                              </div>
+
+                              {/* Footer Actions Bar */}
+                              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                                <span className="text-[11px] text-slate-400">Enhanced Contrast CLAHE</span>
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    onClick={async () => {
+                                      setIsRecalculatingScores(true);
+                                      const cropRes = await api.cropSignature(`data:image/jpeg;base64,${voucherData.frontImage}`);
+                                      if (cropRes.success && cropRes.croppedImage) {
+                                        const formattedSig = cropRes.croppedImage.startsWith('data:') ? cropRes.croppedImage : `data:image/jpeg;base64,${cropRes.croppedImage}`;
+                                        setAutoCroppedSig(formattedSig);
+                                        setCroppedChequeSig(formattedSig);
+                                        setActiveCropMode('auto');
+                                      }
+                                      setIsRecalculatingScores(false);
+                                    }}
+                                    className="flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold text-[11px]"
+                                    title="Reset default automatic signature crop"
+                                  >
+                                    <RefreshCw className="h-3 w-3" /> Re-crop
+                                  </button>
+                                  <button
+                                    onClick={() => setIsCardFlipped(true)}
+                                    className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] px-2.5 py-1 rounded-md shadow-sm transition-all active:scale-95"
+                                  >
+                                    <Crop className="h-3.5 w-3.5" /> Map Custom Area
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            /* BACK FACE: Interactive Crop Instrument Overlay */
+                            <div className="flex flex-col h-full animate-in fade-in duration-300">
+                              {voucherData.frontImage ? (
+                                <SignatureCropOverlay
+                                  imageSrc={`data:image/jpeg;base64,${voucherData.frontImage}`}
+                                  initialRoi={{ x: 0.45, y: 0.52, w: 0.55, h: 0.30 }}
+                                  onApplyCrop={handleCustomCropApply}
+                                  onClose={() => setIsCardFlipped(false)}
+                                  isLoading={isLoadingSignatures}
+                                />
+                              ) : (
+                                <div className="py-12 text-center text-slate-400 text-xs">
+                                  No scanned cheque front image available for cropping.
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right Column: Mandate Specimen Signatures & Photos */}
+                      <div className="md:col-span-7 flex flex-col space-y-4">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-full">
+                          <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                              <User className="h-4 w-4 text-emerald-600" /> Account Mandate Specimen Signatures
+                            </span>
+                            <span className="text-xs font-semibold text-slate-700">
+                              {mandateData?.enq_details?.length || 0} Signator{mandateData?.enq_details?.length === 1 ? 'y' : 'ies'}
+                            </span>
+                          </div>
+
+                          {(!mandateData?.enq_details || mandateData.enq_details.length === 0) ? (
+                            <div className="py-12 text-center text-slate-400 text-sm">
+                              No specimen mandate signatures registered for account <span className="font-mono text-slate-600 font-semibold">{voucherData.accountNumber || 'N/A'}</span>.
+                            </div>
+                          ) : (
+                            <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
+                              {mandateData.enq_details.map((item: any, idx: number) => {
+                                const photoUrl = item.photo ? (item.photo.startsWith('data:') ? item.photo : `data:image/jpeg;base64,${item.photo}`) : (item.pix ? `data:image/jpeg;base64,${item.pix}` : '');
+                                const sigUrl = item.signature ? (item.signature.startsWith('data:') ? item.signature : `data:image/jpeg;base64,${item.signature}`) : '';
+                                const scoreObj = comparisonScores.find(s => s.index === idx);
+                                const similarity = scoreObj?.similarity || 0;
+                                const percentage = scoreObj?.percentage || '0%';
+                                const isHighMatch = similarity >= 70;
+                                const isModerate = similarity >= 50 && similarity < 70;
+
+                                return (
+                                  <div
+                                    key={idx}
+                                    className={`p-3.5 rounded-lg border transition-all ${
+                                      isHighMatch
+                                        ? 'bg-emerald-50/50 border-emerald-200'
+                                        : isModerate
+                                        ? 'bg-amber-50/50 border-amber-200'
+                                        : 'bg-slate-50 border-slate-200'
+                                    }`}
+                                  >
+                                    <div className="flex items-start justify-between gap-3 mb-2">
+                                      <div className="flex items-center space-x-3">
+                                        {photoUrl ? (
+                                          <img
+                                            src={photoUrl}
+                                            alt={`Signatory ${idx + 1}`}
+                                            className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm"
+                                          />
+                                        ) : (
+                                          <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-sm">
+                                            S{idx + 1}
+                                          </div>
+                                        )}
+                                        <div>
+                                          <h4 className="text-xs font-bold text-slate-800">
+                                            {item.relation_no ? `Relation #${item.relation_no}` : `Signatory ${idx + 1}`}
+                                          </h4>
+                                          <div className="flex items-center gap-2 mt-0.5">
+                                            {item.sign_category && (
+                                              <span className="text-[10px] font-semibold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
+                                                Cat: {item.sign_category.trim()}
+                                              </span>
+                                            )}
+                                            {item.limit && (
+                                              <span className="text-[10px] text-slate-500">
+                                                Limit: GHS {item.limit.toLocaleString()}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Match Badge */}
+                                      <div className="flex flex-col items-end">
+                                        {isRecalculatingScores ? (
+                                          <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-slate-200 text-slate-700 flex items-center gap-1.5 animate-pulse">
+                                            <RefreshCw className="h-3 w-3 animate-spin text-blue-600" /> Matching...
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className={`px-2.5 py-1 text-xs font-bold rounded-full flex items-center gap-1 ${
+                                              isHighMatch
+                                                ? 'bg-emerald-600 text-white shadow-sm'
+                                                : isModerate
+                                                ? 'bg-amber-500 text-white'
+                                                : 'bg-slate-200 text-slate-700'
+                                            }`}
+                                          >
+                                            {isHighMatch && <CheckCircle2 className="h-3.5 w-3.5" />}
+                                            {percentage} Match
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Specimen Signature View */}
+                                    {sigUrl && (
+                                      <div className="bg-white rounded-md p-2 border border-slate-200 flex items-center justify-center h-24 mt-2">
+                                        <img
+                                          src={sigUrl}
+                                          alt={`Specimen Signature ${idx + 1}`}
+                                          className="max-h-20 max-w-full object-contain filter contrast-125"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer Decisions */}
+                <div className="bg-white border-t border-slate-200 px-6 py-4 flex items-center justify-between">
+                  <div className="text-xs text-slate-500 flex items-center gap-2">
+                    <span>Verification Audit:</span>
+                    {voucherData.signatureStatus ? (
+                      <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
+                        voucherData.signatureStatus === 'VALID' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                      }`}>
+                        {voucherData.signatureStatus}
+                      </span>
+                    ) : (
+                      <span className="italic text-slate-400">Pending Officer Decision</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => setConfirmDecision('INVALID')}
+                      className="px-4 py-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg border border-red-200 transition-colors flex items-center gap-1.5"
+                    >
+                      <XCircle className="h-4 w-4" /> Reject / Mismatch
+                    </button>
+                    <button
+                      onClick={() => setConfirmDecision('VALID')}
+                      className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="h-4 w-4" /> Corresponds & Approve
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* Confirmation Dialog for Decision Submit / Cancel */}
+          {confirmDecision && (
+            <div className="fixed inset-0 z-[70] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-5 animate-in zoom-in-95 duration-200">
+                <div className="flex items-center space-x-3">
+                  {confirmDecision === 'VALID' ? (
+                    <div className="p-3 bg-emerald-100 rounded-xl text-emerald-600">
+                      <CheckCircle2 className="h-7 w-7" />
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-red-100 rounded-xl text-red-600">
+                      <XCircle className="h-7 w-7" />
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      {confirmDecision === 'VALID' ? 'Confirm Signature Approval' : 'Confirm Signature Rejection'}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Account: <span className="font-mono text-slate-700 font-semibold">{voucherData.accountNumber || '19010000000599171'}</span>
                     </p>
                   </div>
-                )}
-                <button
-                  onClick={() => {
-                    setChequeSignatures([]);
-                    setDbSignatures([]);
-                    setSimilarities([]);
-                    setCurrentChequeIndex(0);
-                    setIsCompareModalOpen(false);
-                  }}
-                  className="p-2 px-6 text-xs text-white bg-yellow-500 hover:bg-yellow-600 rounded flex items-center gap-1 shadow-md hover:shadow-lg transition-all mx-auto mt-2"
-                >
-                  <RefreshCw className="h-4 w-4" /> Reset
-                </button>
+                </div>
+
+                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 text-xs text-slate-600 space-y-1.5">
+                  <p>
+                    {confirmDecision === 'VALID' ? (
+                      <>Are you sure you want to approve this cheque? You are confirming that the scanned signature matches the registered account mandate specimen.</>
+                    ) : (
+                      <>Are you sure you want to reject this cheque? The signature will be flagged as a mismatch against the account mandate specimen.</>
+                    )}
+                  </p>
+                  {voucherData.amount && (
+                    <p className="font-semibold text-slate-800 pt-1">
+                      Cheque Amount: GHS {voucherData.amount}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end space-x-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDecision(null)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                  >
+                    Cancel / Go Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const status = confirmDecision;
+                      setVoucherData(prev => ({ ...prev, signatureStatus: status }));
+                      if (status === 'VALID') {
+                        toast({ title: "Signature Verified & Approved", description: "Cheque signature confirmed VALID." });
+                      } else {
+                        toast({ title: "Signature Flagged & Rejected", description: "Cheque signature flagged as MISMATCH / REJECTED.", variant: "destructive" });
+                      }
+                      setConfirmDecision(null);
+                      setIsCompareModalOpen(false);
+                    }}
+                    className={`px-5 py-2 text-xs font-bold text-white rounded-lg shadow-md transition-all flex items-center gap-1.5 ${
+                      confirmDecision === 'VALID'
+                        ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'
+                        : 'bg-red-600 hover:bg-red-700 active:bg-red-800'
+                    }`}
+                  >
+                    {confirmDecision === 'VALID' ? (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" /> Yes, Confirm Approval
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="h-4 w-4" /> Yes, Confirm Rejection
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           )}

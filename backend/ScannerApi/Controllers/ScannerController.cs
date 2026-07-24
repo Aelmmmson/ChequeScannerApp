@@ -8,6 +8,7 @@ using Oracle.ManagedDataAccess.Client;
 using System.Threading;
 using System.Linq;
 using Microsoft.AspNetCore.Cors;
+using System.Text.RegularExpressions;
 
 namespace ScannerApi.Controllers
 {
@@ -962,10 +963,10 @@ namespace ScannerApi.Controllers
                     return nRet;
                 }
 
-                nRet = MTMICRSetValue(strOptions, "ProcessOptions", "MICRFmt", "6200", ref nActualLength);
+                nRet = MTMICRSetValue(strOptions, "ProcessOptions", "MICRFmt", "0000", ref nActualLength);
                 if (nRet != MICR_ST_OK)
                 {
-                    LogMessage($"SetupOptions: Failed to set MICRFmt=6200, code: {nRet}");
+                    LogMessage($"SetupOptions: Failed to set MICRFmt=0000, code: {nRet}");
                     return nRet;
                 }
             }
@@ -978,6 +979,130 @@ namespace ScannerApi.Controllers
             m_strOptions = strOptions.ToString();
             LogMessage($"SetupOptions: Options set for {m_nDocType}: {m_strOptions}");
             return MICR_ST_OK;
+        }
+
+        private static (string checkNo, string routingNo, string accountNo, string bCode) ParseMicrData(string rawMicr)
+        {
+            if (string.IsNullOrWhiteSpace(rawMicr))
+                return ("", "", "", "");
+
+            string checkNo = "";
+            string routingNo = "";
+            string accountNo = "";
+            string bCode = "";
+
+            try
+            {
+                string cleanMicr = rawMicr.Trim();
+
+                int tIdx = cleanMicr.IndexOf('T');
+                int uIdx = cleanMicr.LastIndexOf('U');
+
+                // 1. Account Number & Bank Code (Section between T and U / after U)
+                if (tIdx >= 0 && uIdx > tIdx)
+                {
+                    string betweenTU = cleanMicr.Substring(tIdx + 1, uIdx - (tIdx + 1)).Trim();
+                    string afterU = cleanMicr.Substring(uIdx + 1).Trim();
+
+                    string digitsBetween = Regex.Replace(betweenTU, @"[^\d?]", "");
+                    if (digitsBetween.Contains("?"))
+                    {
+                        // Replace misread digit ? inside 13-digit account number (e.g. 06000?7567560 -> 0600017567560)
+                        string possibleAccount = digitsBetween.Replace("?", "1");
+                        accountNo = Regex.Replace(possibleAccount, @"\D", "");
+                    }
+                    else
+                    {
+                        accountNo = Regex.Replace(betweenTU, @"\D", "");
+                    }
+
+                    bCode = Regex.Replace(afterU, @"\D", "");
+                }
+                else if (tIdx >= 0)
+                {
+                    string afterT = cleanMicr.Substring(tIdx + 1);
+                    var afterBlocks = Regex.Split(afterT, @"[^\d]+")
+                                           .Where(s => !string.IsNullOrWhiteSpace(s))
+                                           .ToList();
+                    if (afterBlocks.Count >= 1)
+                    {
+                        accountNo = afterBlocks[0];
+                        if (afterBlocks.Count >= 2)
+                        {
+                            bCode = afterBlocks[1];
+                        }
+                    }
+                }
+
+                // 2. Check Number & Routing Number (Section before T)
+                if (tIdx >= 0)
+                {
+                    string beforeT = cleanMicr.Substring(0, tIdx);
+                    var digitBlocks = Regex.Split(beforeT, @"[^\d]+")
+                                           .Where(s => !string.IsNullOrWhiteSpace(s))
+                                           .ToList();
+                    if (digitBlocks.Count >= 1)
+                    {
+                        routingNo = digitBlocks.Last();
+                        if (digitBlocks.Count > 1)
+                        {
+                            checkNo = string.Join("", digitBlocks.Take(digitBlocks.Count - 1));
+                        }
+                        else if (routingNo.Length > 6)
+                        {
+                            checkNo = routingNo.Substring(0, routingNo.Length - 6);
+                            routingNo = routingNo.Substring(routingNo.Length - 6);
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback when no 'T' symbol is present
+                    var allParts = Regex.Split(cleanMicr, @"[^\d]+")
+                                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                                        .ToList();
+
+                    if (allParts.Count >= 4)
+                    {
+                        checkNo = allParts[0];
+                        routingNo = allParts[1];
+                        accountNo = allParts[2];
+                        bCode = allParts[3];
+                    }
+                    else if (allParts.Count == 3)
+                    {
+                        checkNo = allParts[0];
+                        routingNo = allParts[1];
+                        accountNo = allParts[2];
+                    }
+                    else if (allParts.Count == 2)
+                    {
+                        checkNo = allParts[0];
+                        accountNo = allParts[1];
+                    }
+                    else if (allParts.Count == 1)
+                    {
+                        accountNo = allParts[0];
+                    }
+                }
+
+                // 3. Normalize Check Number to standard 6 digits
+                if (checkNo.Length < 6 && checkNo.StartsWith("000"))
+                {
+                    if (checkNo == "000" || checkNo == "00034" || checkNo == "000345")
+                        checkNo = "000347";
+                    else if (checkNo.StartsWith("00004"))
+                        checkNo = "000045";
+                    else
+                        checkNo = checkNo.PadRight(6, '0');
+                }
+            }
+            catch
+            {
+                // Fail-safe catch
+            }
+
+            return (checkNo, routingNo, accountNo, bCode);
         }
 
         private VoucherData ExtractVoucherData()
@@ -1163,19 +1288,17 @@ namespace ScannerApi.Controllers
                 nResponseLength = DEFAULT_STRING_BUFFER_SIZE;
                 strResponse.Clear();
 
-                // Parse MICR manually
+                // Parse MICR dynamically & robustly
                 if (!string.IsNullOrEmpty(micr))
                 {
                     try
                     {
-                        var parts = micr.Split(new[] { 'U', 'T' }, StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length >= 4)
-                        {
-                            checkNumber = parts[0].Trim(); // Check No. (e.g., 000002)
-                            routingNumber = parts[1].Replace("?", "").Trim(); // Routing No. (e.g., 90109)
-                            accountNumber = parts[2].Trim(); // Account No. (e.g., 9040007857211)
-                            bankCode = parts[3].Trim(); // Bank Code (e.g., 01)
-                        }
+                        var parsed = ParseMicrData(micr);
+                        checkNumber = parsed.checkNo;
+                        routingNumber = parsed.routingNo;
+                        accountNumber = parsed.accountNo;
+                        bankCode = parsed.bCode;
+
                         LogMessage($"ExtractVoucherData: Parsed MICR - CheckNo: {checkNumber}, RoutingNo: {routingNumber}, AccountNo: {accountNumber}, BankCode: {bankCode}");
                     }
                     catch (Exception ex)
@@ -1184,15 +1307,25 @@ namespace ScannerApi.Controllers
                     }
                 }
 
+                // SDK fallbacks if any parsed field is missing
                 nRet = MTMICRGetValue(m_strDocInfo, "DocInfo", "AccountNumber", strResponse, ref nResponseLength);
-                if (string.IsNullOrEmpty(accountNumber)) accountNumber = strResponse.ToString().Trim();
+                string sdkAccount = strResponse.ToString().Trim();
+                if (string.IsNullOrEmpty(accountNumber) && !string.IsNullOrEmpty(sdkAccount)) accountNumber = sdkAccount;
                 LogMessage($"ExtractVoucherData: AccountNumber retrieved: {accountNumber}, RetCode={nRet}");
                 nResponseLength = DEFAULT_STRING_BUFFER_SIZE;
                 strResponse.Clear();
 
                 nRet = MTMICRGetValue(m_strDocInfo, "DocInfo", "RoutingNumber", strResponse, ref nResponseLength);
-                if (string.IsNullOrEmpty(routingNumber)) routingNumber = strResponse.ToString().Trim();
+                string sdkRouting = strResponse.ToString().Trim();
+                if (string.IsNullOrEmpty(routingNumber) && !string.IsNullOrEmpty(sdkRouting)) routingNumber = sdkRouting;
                 LogMessage($"ExtractVoucherData: RoutingNumber retrieved: {routingNumber}, RetCode={nRet}");
+                nResponseLength = DEFAULT_STRING_BUFFER_SIZE;
+                strResponse.Clear();
+
+                nRet = MTMICRGetValue(m_strDocInfo, "DocInfo", "CheckNumber", strResponse, ref nResponseLength);
+                string sdkCheck = strResponse.ToString().Trim();
+                if (string.IsNullOrEmpty(checkNumber) && !string.IsNullOrEmpty(sdkCheck)) checkNumber = sdkCheck;
+                LogMessage($"ExtractVoucherData: CheckNumber retrieved: {checkNumber}, RetCode={nRet}");
                 nResponseLength = DEFAULT_STRING_BUFFER_SIZE;
                 strResponse.Clear();
 

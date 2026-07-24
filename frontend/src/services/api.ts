@@ -1,7 +1,7 @@
 import axios, { AxiosError } from 'axios';
 
 const API_BASE_URL = 'http://localhost:5042/api/scanner';
-const OCR_API_URL = 'http://localhost:7007/upload-cheque';
+const OCR_API_URL = 'http://127.0.0.1:8130/upload-cheque';
 
 interface VoucherData {
   voucherNo: string;
@@ -178,23 +178,6 @@ export const api = {
     }
   },
 
-  extractChequeData: async (base64Image: string): Promise<OcrResponse> => {
-    try {
-      const formData = new FormData();
-      const blob = await fetch(`data:image/jpeg;base64,${base64Image}`).then(res => res.blob());
-      formData.append('chequeImage', blob, 'cheque.jpg');
-      const response = await axios.post(OCR_API_URL, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      console.log(`[${new Date().toISOString()}] extractChequeData: Response:`, response.data);
-      return response.data;
-    } catch (error: unknown) {
-      const errorMessage = error instanceof AxiosError ? error.message : String(error);
-      console.error(`[${new Date().toISOString()}] extractChequeData: Error:`, errorMessage);
-      throw new Error(`Failed to extract cheque data: ${errorMessage}`);
-    }
-  },
-
   saveToDatabase: async (voucherData: VoucherData): Promise<OperationResponse> => {
     try {
       const response = await axios.post(`${API_BASE_URL}/save`, voucherData, {
@@ -244,6 +227,118 @@ export const api = {
       const errorMessage = error instanceof AxiosError ? error.message : String(error);
       console.error(`[${new Date().toISOString()}] fetchAccountData: Error:`, errorMessage);
       throw new Error(`Failed to fetch account data: ${errorMessage}`);
+    }
+  },
+
+  getAccountSignatures: async (accountNumber: string): Promise<any> => {
+    const rawAccount = accountNumber.replace(/\D/g, '');
+    const headers = {
+      'Accept': 'application/json',
+      'X-API-KEY': '20171411891',
+      'X-API-SECRET': '141116517P'
+    };
+
+    // 1. Try local proxy first to avoid browser CORS preflight errors
+    try {
+      const response = await axios.get(`/imaging-proxy/api/core_enquiry-${rawAccount}`, { headers });
+      console.log(`[${new Date().toISOString()}] getAccountSignatures (proxy): Response:`, response.data);
+      return response.data;
+    } catch (proxyError: unknown) {
+      console.warn(`[${new Date().toISOString()}] getAccountSignatures proxy failed, trying direct URL:`, proxyError);
+    }
+
+    // 2. Try direct remote URL as fallback
+    try {
+      const response = await axios.get(`http://10.203.14.169/imaging/api/core_enquiry-${rawAccount}`, { headers });
+      console.log(`[${new Date().toISOString()}] getAccountSignatures (direct): Response:`, response.data);
+      return response.data;
+    } catch (directError: unknown) {
+      // 3. Fallback to legacy endpoints if core_enquiry is unavailable
+      try {
+        const fallbackRes = await axios.get(`/imaging-proxy/get_account_signature-${rawAccount}`);
+        return fallbackRes.data;
+      } catch {
+        try {
+          const fallbackDirect = await axios.get(`http://10.203.14.169/imaging/get_account_signature-${rawAccount}`);
+          return fallbackDirect.data;
+        } catch {
+          const errorMessage = directError instanceof AxiosError ? directError.message : String(directError);
+          console.error(`[${new Date().toISOString()}] getAccountSignatures: Error:`, errorMessage);
+          throw new Error(`Failed to fetch account signatures: ${errorMessage}`);
+        }
+      }
+    }
+  },
+
+  cropSignature: async (base64Image: string, roi?: { x: number; y: number; w: number; h: number; isCustom?: boolean }): Promise<{ success: boolean; croppedImage: string; rawCroppedImage?: string; roi?: any }> => {
+    try {
+      const response = await axios.post('http://127.0.0.1:8130/crop-signature', {
+        image: base64Image,
+        roi: roi || { x: 0.45, y: 0.52, w: 0.55, h: 0.30 },
+        isCustom: roi?.isCustom || false
+      });
+      return response.data;
+    } catch (error: unknown) {
+      console.error(`[${new Date().toISOString()}] cropSignature error:`, error);
+      return { success: false, croppedImage: base64Image };
+    }
+  },
+
+  compareSignatures: async (signature1: string, signature2: string): Promise<{ success: boolean; similarityPercentage: number; percentage: string; status: string; debug_details?: any }> => {
+    try {
+      const response = await axios.post('http://127.0.0.1:8130/compare-signatures', {
+        signature1,
+        signature2
+      });
+      return response.data;
+    } catch (error: unknown) {
+      console.error(`[${new Date().toISOString()}] compareSignatures error:`, error);
+      return { success: false, similarityPercentage: 0, percentage: '0%', status: 'ERROR' };
+    }
+  },
+
+  extractChequeData: async (image: string, micrData?: any): Promise<{
+    success: boolean;
+    reviewRequired?: boolean;
+    overallConfidenceScore?: number;
+    flaggedFields?: Array<{ field: string; reason: string }>;
+    chequeData?: {
+      bankName?: string;
+      bankBranch?: string;
+      bankConfidence?: number;
+      checkNumber?: string;
+      accountNumber?: string;
+      routingNumber?: string;
+      micr?: string;
+      amount?: string;
+      amountConfidence?: number;
+      date?: string;
+      dateConfidence?: number;
+      dateStatus?: string;
+      payee?: string;
+      payeeConfidence?: number;
+      legalAmount?: string;
+      legalAmountConfidence?: number;
+    };
+    extractedRois?: {
+      bankRoi?: string;
+      branchRoi?: string;
+      amountRoi?: string;
+      dateRoi?: string;
+      payeeRoi?: string;
+      legalAmountRoi?: string;
+      deskewedCheque?: string;
+    };
+  }> => {
+    try {
+      const response = await axios.post('http://127.0.0.1:8130/extract-cheque-data', {
+        image,
+        micrData
+      });
+      return response.data;
+    } catch (error: unknown) {
+      console.error(`[${new Date().toISOString()}] extractChequeData error:`, error);
+      return { success: false, reviewRequired: true };
     }
   }
 };

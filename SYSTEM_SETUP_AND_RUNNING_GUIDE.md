@@ -193,3 +193,12 @@ Once both servers are running, follow this end-to-end operation workflow:
 | **Failed to load DLL or BadImageFormatException** | The backend API is running in 64-bit (x64) mode, but the driver is 32-bit (x86). | Install the **x86 (32-bit)** version of the .NET 6.0 SDK. Rebuild using target `--runtime win-x86`. |
 | **Database Connection Failures** | Oracle Database IP is unreachable or credentials have expired. | Test ping to `10.203.14.169`. Update connection string inside `ScannerController.cs` with valid credentials. |
 | **Port 5042 or 8080 already in use** | Another instance of the backend API or frontend is already running. | Close any other running terminal windows. In Task Manager, terminate any hung `dotnet` or `node` processes. |
+
+
+TIP:Reload VS Code Window (Recommended to clear inmemory problems)
+
+Press Ctrl + Shift + P on your keyboard.
+Type Developer: Reload Window and press Enter.
+This reinitializes the Python language server cache and instantly clears all phantom inmemory errors.
+
+Python Vision Engine running on http://127.0.0.1:8130.
