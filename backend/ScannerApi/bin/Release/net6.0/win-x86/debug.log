@@ -75155,3 +75155,33 @@ nd\ScannerApi\bin\Release\net6.0\win-x86\debug.log
 [2026-07-24 19:27:01] GetDeviceStatus: Retry MTMICROpenDevice returned 25
 [2026-07-24 19:27:01] Dispose: Closing resources
 [2026-07-24 19:27:01] Dispose: Closed log file handle
+[2026-07-24 19:28:01] SetupLogging: Log file initialized at C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\win-x86\debug.log
+[2026-07-24 19:28:01] Constructor: Initial DocType=CHECK
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 1, MTMICRGetDevice returned 0, DeviceName: STX.STX001
+[2026-07-24 19:28:01] GetFirstDevice: Added device: STX.STX001
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 2, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 3, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 4, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 5, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 6, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 7, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 8, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 9, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 10, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 11, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 12, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 13, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 14, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 15, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 16, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 17, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 18, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 19, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Attempt 1, Index 20, MTMICRGetDevice returned 6, DeviceName: 
+[2026-07-24 19:28:01] GetFirstDevice: Selected device: STX.STX001 on attempt 1, DocType=CHECK
+[2026-07-24 19:28:01] GetDeviceStatus: Found device: STX.STX001, Current DocType=CHECK
+[2026-07-24 19:28:01] GetDeviceStatus: MTMICROpenDevice returned 25
+[2026-07-24 19:28:01] GetDeviceStatus: Retried MTMICRCloseDevice
+[2026-07-24 19:28:01] GetDeviceStatus: Retry MTMICROpenDevice returned 25
+[2026-07-24 19:28:01] Dispose: Closing resources
+[2026-07-24 19:28:01] Dispose: Closed log file handle
