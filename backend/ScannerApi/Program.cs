@@ -37,7 +37,7 @@ namespace ScannerApi
                 {
                     webBuilder
                     .UseStartup<Startup>()
-                    .UseUrls("http://localhost:5042"); // Forces the app to always bind to this port;
+                    .UseUrls("http://localhost:5042", "http://0.0.0.0:5042");
                 });
     }
 }

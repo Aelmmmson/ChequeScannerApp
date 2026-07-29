@@ -70,20 +70,6 @@
           ],
           "assetTargetFallback": true,
           "warn": true,
-          "downloadDependencies": [
-            {
-              "name": "Microsoft.AspNetCore.App.Runtime.win-x86",
-              "version": "[6.0.36, 6.0.36]"
-            },
-            {
-              "name": "Microsoft.NETCore.App.Runtime.win-x86",
-              "version": "[6.0.36, 6.0.36]"
-            },
-            {
-              "name": "Microsoft.WindowsDesktop.App.Runtime.win-x86",
-              "version": "[6.0.36, 6.0.36]"
-            }
-          ],
           "frameworkReferences": {
             "Microsoft.AspNetCore.App": {
               "privateAssets": "none"
@@ -92,12 +78,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Users\\USG\\.dotnet_x86\\sdk\\6.0.428\\RuntimeIdentifierGraph.json"
-        }
-      },
-      "runtimes": {
-        "win-x86": {
-          "#import": []
+          "runtimeIdentifierGraphPath": "C:\\Users\\USG\\AppData\\Local\\Microsoft\\dotnet\\sdk\\6.0.428\\RuntimeIdentifierGraph.json"
         }
       }
     }

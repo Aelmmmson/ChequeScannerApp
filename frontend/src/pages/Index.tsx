@@ -6,7 +6,8 @@ import InfoField from '@/components/InfoField';
 import ImageDisplay from '@/components/ImageDisplay';
 import { api } from '@/services/api';
 import { SignatureCropOverlay } from '@/components/SignatureCropOverlay';
-import { ChevronDown, Scan, Save, Power, X, RefreshCw, User, Camera, ScanFace, CheckCircle, XCircle, ArrowLeft, ArrowRight, ShieldCheck, CheckCircle2, Crop, AlertTriangle } from 'lucide-react';
+import { ChevronDown, Scan, Save, Power, X, RefreshCw, User, Camera, ScanFace, CheckCircle, XCircle, ArrowLeft, ArrowRight, ShieldCheck, CheckCircle2, Crop, AlertTriangle, FileText, CreditCard, Check, AlertCircle } from 'lucide-react';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { useLocation } from 'react-router-dom';
 import Slider from 'react-slick';
 import "slick-carousel/slick/slick.css";
@@ -473,6 +474,8 @@ const Index = () => {
     signatureStatus: "",
     amountMismatch: ""
   });
+  const [isRecordSaved, setIsRecordSaved] = useState<boolean>(false);
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
 
   useEffect(() => {
     const storedVoucherNo = localStorage.getItem('voucherNo');
@@ -810,13 +813,16 @@ const Index = () => {
 
   const handleConnect = async () => {
     setIsLoading(true);
+    setLoadingProgress(15);
     setCurrentAction("Connecting to device...");
     try {
       const response = await api.connectDevice();
+      setLoadingProgress(60);
       if (response.success) {
         setIsDeviceConnected(true);
         const status = await api.getDeviceStatus();
         setConnectedDevice(status.deviceName || "");
+        setLoadingProgress(100);
         toast({
           title: "Device Connected",
           description: `Successfully connected to ${status.deviceName || "device"}.`
@@ -851,9 +857,12 @@ const Index = () => {
       return;
     }
     setIsLoading(true);
+    setIsRecordSaved(false);
+    setLoadingProgress(10);
     setCurrentAction(`Scanning ${docType === 'CHECK' ? 'check' : 'card'}...`);
     try {
       const setDocTypeResponse = await api.setDocType(docType);
+      setLoadingProgress(25);
       if (!setDocTypeResponse.success) {
         toast({
           title: "Document Type Error",
@@ -863,6 +872,7 @@ const Index = () => {
         return;
       }
       const response: ScanResponse = await api.scanVoucher();
+      setLoadingProgress(55);
       if (isErrorResponse(response) && !response.success) {
         toast({
           title: "Scan Failed",
@@ -1008,12 +1018,12 @@ const Index = () => {
               setExtractionResult(ocrResponse);
               updatedVoucherData = {
                 ...updatedVoucherData,
-                bankName: cd.bankName || updatedVoucherData.bankName || "Stanbic Bank",
-                bankBranch: cd.bankBranch || updatedVoucherData.bankBranch || "Ring Road Branch",
+                bankName: cd.bankName || updatedVoucherData.bankName || "",
+                bankBranch: cd.bankBranch || updatedVoucherData.bankBranch || "",
                 checkNumber: cd.checkNumber || updatedVoucherData.checkNumber || "",
                 accountNumber: cd.accountNumber || updatedVoucherData.accountNumber || "",
                 routingNumber: cd.routingNumber || updatedVoucherData.routingNumber || "",
-                amount: cd.amount || updatedVoucherData.amount || "72000.00",
+                amount: cd.amount || updatedVoucherData.amount || "",
                 checkDate: cd.date || updatedVoucherData.checkDate || "",
                 payeeName: cd.payee || updatedVoucherData.payeeName || "",
                 amountWords: cd.legalAmount || updatedVoucherData.amountWords || ""
@@ -1082,6 +1092,7 @@ const Index = () => {
       return;
     }
     setIsLoading(true);
+    setLoadingProgress(25);
     setCurrentAction("Saving to database...");
     try {
       const saveData: VoucherData = {
@@ -1125,7 +1136,9 @@ const Index = () => {
         signatureStatus: docType === 'CHECK' ? voucherData.signatureStatus : "",
         amountMismatch: docType === 'CHECK' ? voucherData.amountMismatch : ""
       };
+      setLoadingProgress(65);
       const response = await api.saveToDatabase(saveData);
+      setLoadingProgress(100);
       if (response.success) {
         toast({
           title: "Data Saved",
@@ -1174,6 +1187,7 @@ const Index = () => {
           amountMismatch: ""
         });
         setHasScanned(false);
+        setIsRecordSaved(true);
         setShowAdvanced(false);
         setIsModalOpen(false);
         setIsCompareModalOpen(false);
@@ -1232,69 +1246,155 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
-      <header className="bg-blue-600 text-white p-2 shadow-sm flex">
-        <h1 className="text-lg font-semibold px-3 flex items-center gap-2">
-          <Scan className="h-5 w-5 animate-pulse" />
-          X100+ Voucher Scanner
-        </h1>
+    <div className="min-h-screen flex flex-col bg-slate-50 selection:bg-blue-100 selection:text-blue-900">
+      <header className="bg-blue-600 text-white px-5 py-3 shadow-xs flex items-center justify-between border-b border-blue-700">
+        <div className="flex items-center space-x-3">
+          <div className="h-8 w-8 rounded-md bg-white/10 border border-white/20 flex items-center justify-center text-white shadow-inner">
+            <Scan className="h-4 w-4 animate-pulse" />
+          </div>
+          <div>
+            <h1 className="text-sm font-semibold tracking-wide text-white">
+              X100+ Voucher Scanner
+            </h1>
+            <p className="text-[11px] text-blue-100/80 font-normal">Union Systems Global — High Precision Capture</p>
+          </div>
+        </div>
+        <div className="flex items-center space-x-3">
+          {/* Header Activity Status Button (Single Unified Status) */}
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-md text-xs font-semibold border transition-all duration-300 ${
+            isLoading
+              ? 'bg-blue-900/40 text-blue-100 border-blue-400/40 shadow-xs'
+              : isRecordSaved
+              ? 'bg-emerald-900/40 text-emerald-100 border-emerald-400/40 shadow-xs'
+              : hasScanned
+              ? 'bg-purple-900/40 text-purple-100 border-purple-400/40 shadow-xs'
+              : isDeviceConnected
+              ? 'bg-emerald-500/20 text-emerald-100 border-emerald-400/30'
+              : 'bg-slate-900/50 text-slate-300 border-slate-700/80'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${
+              isLoading
+                ? 'bg-blue-300 animate-ping'
+                : isRecordSaved
+                ? 'bg-emerald-400'
+                : hasScanned
+                ? 'bg-purple-300'
+                : isDeviceConnected
+                ? 'bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]'
+                : 'bg-slate-400'
+            }`} />
+            <span className="tracking-wider uppercase font-bold text-[11px]">
+              {isLoading
+                ? (currentAction.toLowerCase().includes('scan') ? 'SCANNING' : 'PROCESSING')
+                : isRecordSaved
+                ? 'SAVED'
+                : hasScanned
+                ? 'SCANNED'
+                : isDeviceConnected
+                ? 'READY'
+                : 'DISCONNECTED'}
+            </span>
+          </div>
+        </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-56 bg-white border-r border-gray-200 p-3 flex flex-col space-y-3">
-          <div className="bg-white p-3 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-            <label className="text-xs font-medium text-gray-700 mb-1 block">Document Type</label>
-            <select
-              value={docType}
-              onChange={(e) => setDocType(e.target.value as 'CHECK' | 'MSR')}
-              className="w-full p-2 text-xs text-gray-700 bg-gray-50 rounded border border-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="CHECK">Check</option>
-              <option value="MSR">Card</option>
-            </select>
+        <aside className="w-60 bg-white border-r border-slate-200/80 p-4 flex flex-col space-y-4 shadow-2xs">
+          {/* Segmented Document Type Selector */}
+          <div className="bg-slate-50/80 p-3 rounded-md border border-slate-200/80 transition-all hover:border-slate-300">
+            <label className="text-[11px] font-semibold tracking-wider uppercase text-slate-500 mb-2 block">Document Type</label>
+            <div className="grid grid-cols-2 gap-1.5 bg-slate-200/60 p-1 rounded-md border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => setDocType('CHECK')}
+                className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-bold rounded transition-all cursor-pointer ${
+                  docType === 'CHECK'
+                    ? 'bg-white text-blue-700 shadow-2xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/50'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Check</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDocType('MSR')}
+                className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-bold rounded transition-all cursor-pointer ${
+                  docType === 'MSR'
+                    ? 'bg-white text-blue-700 shadow-2xs border border-slate-200/80'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/50'
+                }`}
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>Card</span>
+              </button>
+            </div>
           </div>
-          <div className="flex flex-col flex-1 space-y-2 bg-white p-3 rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+          <div className="flex flex-col flex-1 space-y-2.5 bg-slate-50/80 p-3.5 rounded-md border border-slate-200/80 transition-all hover:border-slate-300">
             <SidebarButton
               onClick={handleConnect}
               disabled={isLoading || isDeviceConnected}
-              className={isDeviceConnected ? "bg-green-50 hover:bg-green-100 text-green-600 hover:text-green-700" : ""}
-              icon={<Power className="h-3 w-3" />}
+              className={isDeviceConnected ? "bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200/80 rounded-md" : "bg-white hover:bg-slate-100/80 text-slate-800 border-slate-200 rounded-md"}
+              icon={<Power className="h-3.5 w-3.5" />}
             >
               <div className="flex flex-col items-start">
-                <span>{isDeviceConnected ? "CONNECTED" : "CONNECT"}</span>
-                <p className="text-xs text-gray-600 mt-0.5">{connectedDevice || "None"}</p>
+                <span className="font-bold text-[11px] tracking-wider">{isDeviceConnected ? "CONNECTED" : "CONNECT"}</span>
+                <p className="text-[10px] text-slate-500 font-normal mt-0.5">{connectedDevice || "None"}</p>
               </div>
             </SidebarButton>
             <SidebarButton
               onClick={handleScanVoucher}
               disabled={!isDeviceConnected || isLoading}
-              icon={<Scan className="h-3 w-3" />}
+              variant="default"
+              className={!isDeviceConnected || isLoading ? "bg-slate-200 text-slate-500 border-slate-300" : "bg-blue-600 hover:bg-blue-700 hover:text-white text-white border-transparent"}
+              icon={<Scan className="h-3.5 w-3.5" />}
             >
-              Scan {docType === 'CHECK' ? 'Check' : 'Card'}
+              <span>Scan {docType === 'CHECK' ? 'Check' : 'Card'}</span>
             </SidebarButton>
             <SidebarButton
               onClick={handleSaveToDb}
               disabled={!hasScanned || isLoading}
-              icon={<Save className="h-3 w-3" />}
+              className="bg-white hover:bg-slate-100 text-slate-800 border-slate-200 shadow-2xs rounded-md"
+              icon={<Save className="h-3.5 w-3.5 text-slate-600" />}
             >
-              Save to DB
+              <span className="font-semibold">Save Record</span>
             </SidebarButton>
             <SidebarButton
               onClick={handleExit}
-              className="bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 mt-auto"
-              icon={<X className="h-3 w-3" />}
+              className="bg-red-50/80 hover:bg-red-100 text-red-600 border-red-200/80 hover:text-red-700 mt-auto rounded-md"
+              icon={<X className="h-3.5 w-3.5" />}
             >
-              Exit
+              <span className="font-semibold">Exit App</span>
             </SidebarButton>
           </div>
         </aside>
-        <main className="flex-1 p-8 overflow-y-auto space-y-4 relative">
+        <main className="flex-1 p-6 md:p-8 overflow-y-auto space-y-5 relative">
+          {/* Light Theme Minimalist Loader with Live Numerical Counter (%) */}
           {isLoading && (
-            <div className="bg-blue-50 text-blue-700 p-3 rounded-lg border border-blue-100 shadow-sm animate-pulse">
-              <span className="font-medium text-sm">{currentAction}</span>
+            <div className="bg-white border border-slate-200/90 rounded-md p-3.5 shadow-sm flex items-center justify-between animate-fade-in relative overflow-hidden text-xs">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-slate-100">
+                <div 
+                  className="h-full bg-blue-600 transition-all duration-300 ease-out" 
+                  style={{ width: `${Math.max(5, Math.min(100, loadingProgress))}%` }}
+                />
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-7 h-7 rounded-md bg-blue-50 border border-blue-200/80 flex items-center justify-center shrink-0">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                </div>
+                <div>
+                  <span className="font-semibold text-xs text-slate-900 block">{currentAction || 'Processing operation...'}</span>
+                  <span className="text-[10px] text-slate-500">Please wait while the scanner hardware executes the command</span>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-md shadow-2xs">
+                  {Math.max(5, Math.min(100, loadingProgress))}%
+                </span>
+              </div>
             </div>
           )}
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <InfoField
                 label="Voucher No"
                 value={voucherData.voucherNo}
@@ -1307,67 +1407,61 @@ const Index = () => {
                 value={voucherData.narration}
                 onChange={(value) => setVoucherData(prev => ({ ...prev, narration: value }))}
                 readOnly={false}
-                placeholder="Enter narration"
+                placeholder="Enter narration details..."
                 compact={true}
               />
             </div>
             {docType === 'CHECK' && hasScanned && (
-              <div className="flex flex-col md:flex-row gap-4 items-center">
-                <InfoField
-                  label="MICR"
-                  value={voucherData.micr}
-                  readOnly={true}
-                  compact={true}
-                />
-                <InfoField
-                  label="Check Number"
-                  value={voucherData.checkNumber}
-                  readOnly={true}
-                  compact={true}
-                />
-                <InfoField
-                  label="Routing Number"
-                  value={voucherData.routingNumber}
-                  readOnly={true}
-                  compact={true}
-                />
-                <InfoField
-                  label="Account Number"
-                  value={voucherData.accountNumber}
-                  readOnly={true}
-                  compact={true}
-                />
-                <div className="flex items-center gap-2">
+              <div className="bg-white p-4 rounded-md border border-slate-200/80 shadow-2xs space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end">
                   <InfoField
-                    label="Bank Code"
-                    value={voucherData.bankCode}
+                    label="MICR"
+                    value={voucherData.micr}
                     readOnly={true}
                     compact={true}
                   />
-                  {/* <button
-                    onClick={handleOpenFaceRecognition}
-                    className="relative group flex items-center justify-center p-2 text-gray-700 hover:text-blue-600 transition-colors"
-                    title="ScanFace Recognition"
-                  >
-                    <ScanFace className="h-4 w-4" />
-                    <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-600 text-white text-[10px] rounded py-0.5 px-1 whitespace-nowrap">
-                      ScanFace Recognition
-                    </span>
-                  </button> */}
-                  <button
-                    onClick={() => setIsModalOpen(true)}
-                    className="relative group flex items-center justify-center space-x-1.5 px-3 py-3 ml-5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-md shadow-sm transition-colors cursor-pointer" 
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5 text-blue-100" />
-                    <span>Advanced</span>
-                    <span className="absolute top-full mt-2 hidden group-hover:block bg-blue-700 text-white text-[10px] rounded py-0.5 px-1.5 whitespace-nowrap shadow-md z-10">
-                      View Check Details & Information
-                    </span>
-                  </button>
+                  <InfoField
+                    label="Check Number"
+                    value={voucherData.checkNumber}
+                    readOnly={true}
+                    compact={true}
+                  />
+                  <InfoField
+                    label="Routing Number"
+                    value={voucherData.routingNumber}
+                    readOnly={true}
+                    compact={true}
+                  />
+                  <InfoField
+                    label="Account Number"
+                    value={voucherData.accountNumber}
+                    readOnly={true}
+                    compact={true}
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1">
+                      <InfoField
+                        label="Bank Code"
+                        value={voucherData.bankCode}
+                        readOnly={true}
+                        compact={true}
+                      />
+                    </div>
+                    <button
+                      onClick={() => setIsModalOpen(true)}
+                      className="relative group flex items-center justify-center space-x-1.5 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-md shadow-2xs transition-all cursor-pointer mb-2" 
+                    >
+                      <ShieldCheck className="w-4 h-4 text-blue-100 shrink-0" />
+                      <span>Advanced</span>
+                      <span className="absolute top-full mt-2 hidden group-hover:block bg-slate-900 text-white text-[10px] rounded py-1 px-2.5 whitespace-nowrap shadow-xl z-20 font-normal">
+                        View Check Details & Verification
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
-            <div className="bg-blue-50/50 p-4 rounded-lg border border-dashed border-blue-300 shadow-sm transition-all">
+            <div className="bg-white p-5 rounded-md border border-slate-200/80 shadow-2xs transition-all">
               {docType === 'MSR' ? (
                 <div className="space-y-4">
                   <h2 className="text-lg font-semibold text-gray-700">Card Details</h2>
@@ -1696,7 +1790,7 @@ const Index = () => {
                           </span>
                         </div>
                         <span className="font-mono bg-white px-2.5 py-0.5 rounded-full border text-[11px] font-bold shadow-xs">
-                          Confidence: {Math.round((extractionResult.overallConfidenceScore || 0.92) * 100)}%
+                          Confidence: {Math.round((extractionResult.overallConfidenceScore ?? 0) * 100)}%
                         </span>
                       </div>
 
@@ -1712,45 +1806,53 @@ const Index = () => {
                     </div>
                   )}
 
-                  {/* Extracted Field ROI Snippets */}
-                  {extractionResult?.extractedRois && (
-                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 mr-2"></span>
-                        Extracted Field ROI Snippets (Scanned Crop Visual Verification)
-                      </h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1">
-                        {extractionResult.extractedRois.amountRoi && (
-                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 mb-1">Numeric Amount Crop</span>
-                            <img src={extractionResult.extractedRois.amountRoi} alt="Amount ROI" className="max-h-14 object-contain rounded border border-slate-300" />
-                            <span className="text-[11px] font-bold text-slate-800 mt-1">GHS {voucherData.amount || '72000.00'}</span>
-                          </div>
-                        )}
-                        {extractionResult.extractedRois.dateRoi && (
-                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 mb-1">Date Box Crop</span>
-                            <img src={extractionResult.extractedRois.dateRoi} alt="Date ROI" className="max-h-14 object-contain rounded border border-slate-300" />
-                            <span className="text-[11px] font-bold text-slate-800 mt-1">{voucherData.checkDate || '17/07/2026'}</span>
-                          </div>
-                        )}
-                        {extractionResult.extractedRois.payeeRoi && (
-                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 mb-1">Payee Line Crop</span>
-                            <img src={extractionResult.extractedRois.payeeRoi} alt="Payee ROI" className="max-h-14 object-contain rounded border border-slate-300" />
-                            <span className="text-[11px] font-bold text-slate-800 mt-1">{voucherData.payeeName || 'Henry Enterprise'}</span>
-                          </div>
-                        )}
-                        {extractionResult.extractedRois.bankRoi && (
-                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
-                            <span className="text-[10px] font-bold text-slate-500 mb-1">Bank Header Crop</span>
-                            <img src={extractionResult.extractedRois.bankRoi} alt="Bank ROI" className="max-h-14 object-contain rounded border border-slate-300" />
-                            <span className="text-[11px] font-bold text-slate-800 mt-1">{voucherData.bankName || 'Stanbic Bank'}</span>
-                          </div>
-                        )}
+                    {/* Extracted Field ROI Snippets */}
+                    {extractionResult?.extractedRois && (
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-2">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-blue-900 flex items-center border-b border-slate-100 pb-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 mr-2"></span>
+                          Extracted Field ROI Snippets (Scanned Crop Visual Verification)
+                        </h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1">
+                          {extractionResult.extractedRois.amountRoi && (
+                            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                              <span className="text-[10px] font-bold text-slate-500 mb-1">Numeric Amount Crop</span>
+                              <img src={extractionResult.extractedRois.amountRoi} alt="Amount ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                              <span className="text-[11px] font-bold text-slate-800 mt-1">
+                                {voucherData.amount ? `GHS ${voucherData.amount}` : 'Not Detected'}
+                              </span>
+                            </div>
+                          )}
+                          {extractionResult.extractedRois.dateRoi && (
+                            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                              <span className="text-[10px] font-bold text-slate-500 mb-1">Date Box Crop</span>
+                              <img src={extractionResult.extractedRois.dateRoi} alt="Date ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                              <span className="text-[11px] font-bold text-slate-800 mt-1">
+                                {voucherData.checkDate || 'Not Detected'}
+                              </span>
+                            </div>
+                          )}
+                          {extractionResult.extractedRois.payeeRoi && (
+                            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                              <span className="text-[10px] font-bold text-slate-500 mb-1">Payee Line Crop</span>
+                              <img src={extractionResult.extractedRois.payeeRoi} alt="Payee ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                              <span className="text-[11px] font-bold text-slate-800 mt-1">
+                                {voucherData.payeeName || 'Not Detected'}
+                              </span>
+                            </div>
+                          )}
+                          {extractionResult.extractedRois.bankRoi && (
+                            <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 flex flex-col items-center">
+                              <span className="text-[10px] font-bold text-slate-500 mb-1">Bank Header Crop</span>
+                              <img src={extractionResult.extractedRois.bankRoi} alt="Bank ROI" className="max-h-14 object-contain rounded border border-slate-300" />
+                              <span className="text-[11px] font-bold text-slate-800 mt-1">
+                                {voucherData.bankName || 'Not Detected'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Left Column */}
@@ -1776,8 +1878,8 @@ const Index = () => {
                           Bank Details
                         </h3>
                         <div className="space-y-2 pt-1">
-                          <DetailItem label="Bank Name" value={voucherData.bankName || ''} />
-                          <DetailItem label="Bank Branch" value={voucherData.bankBranch || ''} />
+                          <DetailItem label="Bank Name" value={voucherData.bankName && voucherData.bankName !== 'BRANCH =' ? voucherData.bankName : 'Not Detected'} />
+                          <DetailItem label="Bank Branch" value={voucherData.bankBranch && !voucherData.bankBranch.toUpperCase().includes('BRANCH =') && voucherData.bankBranch !== '=' ? voucherData.bankBranch : 'Not Detected'} />
                           <DetailItem label="Bank Code" value={voucherData.bankCode || ''} />
                           <DetailItem label="Routing Number" value={voucherData.routingNumber || ''} />
                         </div>
@@ -1808,19 +1910,22 @@ const Index = () => {
                         <div className="space-y-2 pt-1">
                           <StatusItem 
                             label="Amount Mismatch" 
-                            value={voucherData.amountMismatch || ''} 
+                            value={voucherData.amountMismatch || 'Not Verified'} 
                             type={voucherData.amountMismatch === "Yes" ? "error" : (voucherData.amountMismatch === "No" ? "success" : "neutral")}
                           />
                           <StatusItem 
                             label="Signature Status" 
-                            value={voucherData.signatureStatus || ''} 
+                            value={
+                              voucherData.signatureStatus === "VALID" ? `VALID (${voucherData.signaturesPresent || '1'} of ${voucherData.requiredSignatures || '1'} Signed)` :
+                              voucherData.signatureStatus === "INSUFFICIENT" ? `INSUFFICIENT (${voucherData.signaturesPresent || '0'} of ${voucherData.requiredSignatures || '1'} Signed)` :
+                              voucherData.signatureStatus === "NONE" ? `MISSING (0 of ${voucherData.requiredSignatures || '1'} Signed)` :
+                              (voucherData.signatureStatus || 'Unverified')
+                            } 
                             type={
                               voucherData.signatureStatus === "INSUFFICIENT" || voucherData.signatureStatus === "NONE" ? "error" :
                               (voucherData.signatureStatus === "VALID" ? "success" : "neutral")
                             }
                           />
-                          <DetailItem label="Required Signatures" value={voucherData.requiredSignatures || ''} />
-                          <DetailItem label="Signatures Present" value={voucherData.signaturesPresent || ''} />
                         </div>
                       </div>
 
@@ -2053,7 +2158,7 @@ const Index = () => {
                                 <button
                                   onClick={() => handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto')}
                                   disabled={activeCropMode === 'auto' && !customCroppedSig}
-                                  className={`px-2.5 py-1 text-[10px] font-bold rounded-full transition-all flex items-center gap-1 shadow-sm ${
+                                  className={`px-1.5 py-1 text-[10px] font-bold rounded-full transition-all flex items-center gap-1 shadow-sm ${
                                     activeCropMode === 'auto'
                                       ? 'bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200'
                                       : 'bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200'
@@ -2182,12 +2287,20 @@ const Index = () => {
                                 const isHighMatch = similarity >= 70;
                                 const isModerate = similarity >= 50 && similarity < 70;
 
+                                // Parse cheque amount and relation limit
+                                const rawChequeAmt = voucherData.amount || '0';
+                                const chequeAmountValue = parseFloat(rawChequeAmt.toString().replace(/[^0-9.]/g, '')) || 0;
+                                const itemLimitVal = item.limit !== undefined && item.limit !== null ? parseFloat(item.limit.toString().replace(/[^0-9.]/g, '')) : (item.amtlimit !== undefined ? parseFloat(item.amtlimit.toString()) : undefined);
+                                const isLimitExceeded = itemLimitVal !== undefined && itemLimitVal > 0 && chequeAmountValue > itemLimitVal;
+                                const signCategory = (item.sign_category || item.category || 'N/A').trim();
+                                const isEligible = !isLimitExceeded;
+
                                 return (
                                   <div
                                     key={idx}
-                                    className={`p-3.5 rounded-lg border transition-all ${
+                                    className={`p-3.5 rounded-xl border transition-all ${
                                       isHighMatch
-                                        ? 'bg-emerald-50/50 border-emerald-200'
+                                        ? 'bg-emerald-50/50 border-emerald-200 shadow-2xs'
                                         : isModerate
                                         ? 'bg-amber-50/50 border-amber-200'
                                         : 'bg-slate-50 border-slate-200'
@@ -2207,25 +2320,100 @@ const Index = () => {
                                           </div>
                                         )}
                                         <div>
-                                          <h4 className="text-xs font-bold text-slate-800">
-                                            {item.relation_no ? `Relation #${item.relation_no}` : `Signatory ${idx + 1}`}
-                                          </h4>
-                                          <div className="flex items-center gap-2 mt-0.5">
-                                            {item.sign_category && (
-                                              <span className="text-[10px] font-semibold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
-                                                Cat: {item.sign_category.trim()}
-                                              </span>
-                                            )}
-                                            {item.limit && (
-                                              <span className="text-[10px] text-slate-500">
-                                                Limit: GHS {item.limit.toLocaleString()}
-                                              </span>
-                                            )}
+                                          <div className="flex items-center gap-2">
+                                            <h4 className="text-xs font-bold text-slate-900">
+                                              {item.relation_no ? `Relation #${item.relation_no}` : `Signatory ${idx + 1}`}
+                                            </h4>
+                                            
+                                            {/* Eligibility Status Pill */}
+                                            <TooltipProvider delayDuration={150}>
+                                              {isEligible ? (
+                                                <Tooltip>
+                                                  <TooltipTrigger asChild>
+                                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-help">
+                                                      <Check className="w-2.5 h-2.5 text-emerald-700" /> Eligible
+                                                    </span>
+                                                  </TooltipTrigger>
+                                                  <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
+                                                    Active authorized signatory for this cheque
+                                                  </TooltipContent>
+                                                </Tooltip>
+                                              ) : (
+                                                <Tooltip>
+                                                  <TooltipTrigger asChild>
+                                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-red-700 bg-red-100 border border-red-300 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-help">
+                                                      <AlertTriangle className="w-2.5 h-2.5 text-red-600 animate-pulse" /> Not Allowed
+                                                    </span>
+                                                  </TooltipTrigger>
+                                                  <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
+                                                    Cheque amount exceeds allowed limit for this signatory
+                                                  </TooltipContent>
+                                                </Tooltip>
+                                              )}
+                                            </TooltipProvider>
                                           </div>
+
+                                          {/* Sign Category & Amount Limit Row with Hover Info Tooltips */}
+                                          <TooltipProvider delayDuration={150}>
+                                            <div className="flex flex-wrap items-center gap-3 mt-1 text-slate-700">
+                                              
+                                              {/* Sign Category */}
+                                              <div className="flex items-center gap-1">
+                                                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Cat:</span>
+                                                <span className="text-xs font-bold text-slate-900">{signCategory}</span>
+                                                <Tooltip>
+                                                  <TooltipTrigger asChild>
+                                                    <span className="inline-flex items-center cursor-help ml-0.5">
+                                                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                                    </span>
+                                                  </TooltipTrigger>
+                                                  <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
+                                                    Category '{signCategory}' is valid & authorized for this account mandate
+                                                  </TooltipContent>
+                                                </Tooltip>
+                                              </div>
+
+                                              {/* Amount Limit Check */}
+                                              <div className="flex items-center gap-1">
+                                                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Limit:</span>
+                                                <span className={`text-xs font-bold ${isLimitExceeded ? 'text-red-600 font-black' : 'text-slate-900'}`}>
+                                                  {itemLimitVal !== undefined && itemLimitVal > 0 
+                                                    ? `GHS ${itemLimitVal.toLocaleString('en-US')}` 
+                                                    : 'No Limit'}
+                                                </span>
+                                                {isLimitExceeded ? (
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase text-red-600 bg-red-100/80 border border-red-300 px-1.5 py-0.5 rounded-full cursor-help ml-1">
+                                                        <AlertCircle className="w-3 h-3 text-red-600 animate-pulse shrink-0" />
+                                                        <span>Exceeded</span>
+                                                      </span>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
+                                                      Cheque amount ({chequeAmountValue ? `GHS ${chequeAmountValue.toLocaleString('en-US')}` : 'N/A'}) exceeds limit of GHS {itemLimitVal?.toLocaleString('en-US')}
+                                                    </TooltipContent>
+                                                  </Tooltip>
+                                                ) : (
+                                                  <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                      <span className="inline-flex items-center cursor-help ml-0.5">
+                                                        <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                                      </span>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
+                                                      Cheque amount is within allowable signatory limit
+                                                    </TooltipContent>
+                                                  </Tooltip>
+                                                )}
+                                              </div>
+
+                                            </div>
+                                          </TooltipProvider>
+
                                         </div>
                                       </div>
 
-                                      {/* Match Badge */}
+                                      {/* Match Percentage Badge */}
                                       <div className="flex flex-col items-end">
                                         {isRecalculatingScores ? (
                                           <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-slate-200 text-slate-700 flex items-center gap-1.5 animate-pulse">

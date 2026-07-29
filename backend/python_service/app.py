@@ -9,6 +9,11 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Private-Network', 'true')
+    return response
+
 def base64_to_cv2(b64_string):
     if not b64_string:
         return None
@@ -441,6 +446,7 @@ def extract_cheque_data_endpoint():
         from cheque_extractor import process_cheque_pipeline
         data = request.json or {}
         image_b64 = data.get('image') or data.get('frontImage') or ''
+        required_signatures = int(data.get('requiredSignatures') or data.get('required_signatures') or 1)
         micr_data = data.get('micrData') or {
             'checkNumber': data.get('checkNumber'),
             'accountNumber': data.get('accountNumber'),
@@ -448,7 +454,7 @@ def extract_cheque_data_endpoint():
             'rawMicr': data.get('micr')
         }
         
-        result = process_cheque_pipeline(image_b64, micr_data)
+        result = process_cheque_pipeline(image_b64, micr_data, required_signatures)
         return jsonify(result)
     except Exception as e:
         print("extract_cheque_data error:", str(e))

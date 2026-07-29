@@ -14,18 +14,11 @@ namespace ScannerApi
             {
                 options.AddPolicy("AllowFrontend", builder =>
                 {
-                    builder.WithOrigins(
-                            "http://localhost:3000",
-                            "http://localhost:8080",
-                            "http://localhost:8081",
-                            "http://localhost/my-app",
-                            "http://localhost/vscanner",
-                            "http://localhost" // Covers all subpaths
-                        )
+                    builder
+                        .SetIsOriginAllowed(_ => true) // Allow any origin (localhost, 10.203.14.169, any IP/domain)
                         .AllowAnyMethod()
                         .AllowAnyHeader()
-                        .AllowCredentials() // Support credentials (e.g., cookies, auth headers)
-                        .SetIsOriginAllowedToAllowWildcardSubdomains(); // Handle subpaths
+                        .AllowCredentials();
                 });
             });
         }
@@ -37,11 +30,28 @@ namespace ScannerApi
                 app.UseDeveloperExceptionPage();
             }
 
-            // Comment out UseHttpsRedirection to avoid forcing HTTPS
-            // app.UseHttpsRedirection();
+            // Custom CORS & Private Network Access (PNA) Middleware - MUST be BEFORE app.UseRouting()
+            app.Use(async (context, next) =>
+            {
+                var origin = context.Request.Headers["Origin"].ToString();
+                context.Response.Headers["Access-Control-Allow-Origin"] = string.IsNullOrEmpty(origin) ? "*" : origin;
+                context.Response.Headers["Access-Control-Allow-Credentials"] = "true";
+                context.Response.Headers["Access-Control-Allow-Headers"] = "*";
+                context.Response.Headers["Access-Control-Allow-Methods"] = "*";
+                context.Response.Headers["Access-Control-Allow-Private-Network"] = "true";
+
+                if (context.Request.Method == "OPTIONS")
+                {
+                    context.Response.StatusCode = 200;
+                    await context.Response.CompleteAsync();
+                    return;
+                }
+
+                await next();
+            });
 
             app.UseRouting();
-            app.UseCors("AllowFrontend"); // Apply CORS before Authorization
+            app.UseCors("AllowFrontend");
             app.UseAuthorization();
             app.UseEndpoints(endpoints =>
             {

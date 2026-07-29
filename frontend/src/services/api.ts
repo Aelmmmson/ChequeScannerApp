@@ -1,7 +1,7 @@
 import axios, { AxiosError } from 'axios';
 
 const API_BASE_URL = 'http://localhost:5042/api/scanner';
-const OCR_API_URL = 'http://127.0.0.1:8130/upload-cheque';
+const OCR_API_URL = 'http://localhost:8130/upload-cheque';
 
 interface VoucherData {
   voucherNo: string;

@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "ll476JmaSD1sEsdJp9ahXNEPBrWia3rtq6C0wQf3kpUrVrZ0cG6RWRc7/Per40UCvIbMm+EotmAetic1+gNf+w==",
+  "dgSpecHash": "JJ8KTg7s681JnAGXWRymL7/lYcoaCt01MEca8D7zM3psHE/ryl56zLoNSj7nctQcwKlt83iUJkYy8vL9tAwwuA==",
   "success": true,
   "projectFilePath": "C:\\Users\\USG\\Downloads\\ChequeScannerApp\\backend\\ScannerApi\\ScannerApi.csproj",
   "expectedPackageFiles": [
@@ -48,10 +48,7 @@
     "C:\\Users\\USG\\.nuget\\packages\\system.security.permissions\\6.0.0\\system.security.permissions.6.0.0.nupkg.sha512",
     "C:\\Users\\USG\\.nuget\\packages\\system.security.principal.windows\\5.0.0\\system.security.principal.windows.5.0.0.nupkg.sha512",
     "C:\\Users\\USG\\.nuget\\packages\\system.text.encodings.web\\8.0.0\\system.text.encodings.web.8.0.0.nupkg.sha512",
-    "C:\\Users\\USG\\.nuget\\packages\\system.windows.extensions\\6.0.0\\system.windows.extensions.6.0.0.nupkg.sha512",
-    "C:\\Users\\USG\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x86\\6.0.36\\microsoft.netcore.app.runtime.win-x86.6.0.36.nupkg.sha512",
-    "C:\\Users\\USG\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x86\\6.0.36\\microsoft.windowsdesktop.app.runtime.win-x86.6.0.36.nupkg.sha512",
-    "C:\\Users\\USG\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x86\\6.0.36\\microsoft.aspnetcore.app.runtime.win-x86.6.0.36.nupkg.sha512"
+    "C:\\Users\\USG\\.nuget\\packages\\system.windows.extensions\\6.0.0\\system.windows.extensions.6.0.0.nupkg.sha512"
   ],
   "logs": []
 }
