@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
+import usgLogo from '@/assets/usg-logo.png';
 import { useToast } from "@/components/ui/use-toast";
 import DeviceStatus from '@/components/DeviceStatus';
 import SidebarButton from '@/components/SidebarButton';
 import InfoField from '@/components/InfoField';
 import ImageDisplay from '@/components/ImageDisplay';
 import { api } from '@/services/api';
+import { appConfig } from '@/config/appConfig';
+import { parseMicr } from '@/utils/micrParser';
 import { SignatureCropOverlay } from '@/components/SignatureCropOverlay';
+import ProgressiveFluxLoader from '@/components/ui/progressive-flux-loader';
 import { ChevronDown, Scan, Save, Power, X, RefreshCw, User, Camera, ScanFace, CheckCircle, XCircle, ArrowLeft, ArrowRight, ShieldCheck, CheckCircle2, Crop, AlertTriangle, FileText, CreditCard, Check, AlertCircle } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { useLocation } from 'react-router-dom';
@@ -236,6 +240,10 @@ interface VoucherData {
   routingNumber: string;
   accountNumber: string;
   bankCode: string;
+  countryCode?: string;
+  stateCode?: string;
+  branchCode?: string;
+  transactionCode?: string;
   checkDate: string;
   amount: string;
   amountWords: string;
@@ -392,16 +400,27 @@ const StatusItem: React.FC<StatusItemProps> = ({ label, value, type = "neutral" 
   );
 };
 
+// Helper to robustly extract voucher number from URL (handles ?voucherNo=123, ?voucherNo-123, ?voucherNo:123, etc.)
+const extractVoucherNoFromUrl = (search: string): string => {
+  if (!search) return "";
+  const match = search.match(/(?:voucherNo|vNo|voucher_no|voucher)[=\-:\s]?([A-Za-z0-9_\-]+)/i);
+  if (match && match[1]) {
+    return match[1].trim();
+  }
+  const params = new URLSearchParams(search);
+  return params.get('voucherNo') || params.get('voucher_no') || params.get('vNo') || "";
+};
+
 const Index = () => {
   const { toast } = useToast();
   const location = useLocation();
-  const queryParams = new URLSearchParams(location.search);
-  const voucherNoFromUrl = queryParams.get('voucherNo');
+  const voucherNoFromUrl = extractVoucherNoFromUrl(location.search);
   const [docType, setDocType] = useState<'CHECK' | 'MSR'>('CHECK');
   const [isVoucherNoRequired, setIsVoucherNoRequired] = useState(!!voucherNoFromUrl);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [collapseTimer, setCollapseTimer] = useState<number>(30);
   const [chequeSignatures, setChequeSignatures] = useState<string[]>([]);
   const [dbSignatures, setDbSignatures] = useState<string[]>([]);
   const [similarities, setSimilarities] = useState<number[][]>([]);
@@ -461,6 +480,10 @@ const Index = () => {
     routingNumber: "",
     accountNumber: "",
     bankCode: "",
+    countryCode: "",
+    stateCode: "",
+    branchCode: "",
+    transactionCode: "",
     checkDate: "",
     amount: "",
     amountWords: "",
@@ -477,6 +500,45 @@ const Index = () => {
   const [isRecordSaved, setIsRecordSaved] = useState<boolean>(false);
   const [loadingProgress, setLoadingProgress] = useState<number>(0);
 
+  const [isAsideHovered, setIsAsideHovered] = useState<boolean>(false);
+
+  // Automatically trigger signature validation right aside when front image is available
+  useEffect(() => {
+    if (appConfig.SIGNATURE_VALIDATION_ENABLED === 'Y' && voucherData.frontImage && docType === 'CHECK') {
+      setIsCompareModalOpen(true);
+      setCollapseTimer(30);
+    }
+  }, [voucherData.frontImage, docType]);
+
+  // 30-second auto-collapse timer for signature validation right aside
+  // Only counts down when user is idle (not hovering, not mapping custom crop, and not loading)
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+
+    if (isCompareModalOpen) {
+      interval = setInterval(() => {
+        // If user is actively interacting, hovering, or cropping, hold/reset the timer to 30s
+        if (isAsideHovered || isCardFlipped || isLoadingSignatures || isRecalculatingScores) {
+          setCollapseTimer(30);
+        } else {
+          setCollapseTimer(prev => {
+            if (prev <= 1) {
+              setIsCompareModalOpen(false);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }
+      }, 1000);
+    } else {
+      setCollapseTimer(30);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isCompareModalOpen, isAsideHovered, isCardFlipped, isLoadingSignatures, isRecalculatingScores]);
+
   useEffect(() => {
     const storedVoucherNo = localStorage.getItem('voucherNo');
     const initialVoucherNo = voucherNoFromUrl || storedVoucherNo || "";
@@ -486,7 +548,7 @@ const Index = () => {
   }, [voucherNoFromUrl]);
 
   useEffect(() => {
-    if (voucherData.frontImage && docType === 'CHECK' && isCompareModalOpen) {
+    if (appConfig.SIGNATURE_VALIDATION_ENABLED === 'Y' && voucherData.frontImage && docType === 'CHECK' && isCompareModalOpen) {
       setIsLoadingSignatures(true);
       const fetchAndProcessSignatures = async () => {
         try {
@@ -506,17 +568,15 @@ const Index = () => {
           }
 
           // 2. Fetch mandate details and specimen signatures from Core Mandate API
-          const accNo = voucherData.accountNumber || "19010000000599171";
-          let mandateRes = await api.getAccountSignatures(accNo);
-
-          // Temporary testing fallback: If account read has no registered mandate signatures, fetch for account 19010000000599171
-          if ((!mandateRes || !mandateRes.enq_details || !Array.isArray(mandateRes.enq_details) || mandateRes.enq_details.length === 0) && accNo !== "19010000000599171") {
-            console.log("No mandates found for account", accNo, ". Fetching fallback test mandate account 19010000000599171");
-            const fallbackRes = await api.getAccountSignatures("19010000000599171");
-            if (fallbackRes && fallbackRes.enq_details && Array.isArray(fallbackRes.enq_details) && fallbackRes.enq_details.length > 0) {
-              mandateRes = fallbackRes;
-            }
+          const accNo = voucherData.accountNumber?.trim();
+          if (!accNo) {
+            setMandateData({ enq_details: [] });
+            setComparisonScores([]);
+            setIsLoadingSignatures(false);
+            return;
           }
+
+          const mandateRes = await api.getAccountSignatures(accNo);
           setMandateData(mandateRes);
 
           // 3. Compare cropped signature against each mandate specimen
@@ -576,9 +636,11 @@ const Index = () => {
       // 2. Fetch / verify account mandates
       let mandateRes = mandateData;
       if (!mandateRes || !mandateRes.enq_details) {
-        const accNo = voucherData.accountNumber || "19010000000599171";
-        mandateRes = await api.getAccountSignatures(accNo);
-        setMandateData(mandateRes);
+        const accNo = voucherData.accountNumber?.trim();
+        if (accNo) {
+          mandateRes = await api.getAccountSignatures(accNo);
+          setMandateData(mandateRes);
+        }
       }
 
       // 3. Recalculate comparison scores for all mandate signatories
@@ -882,87 +944,12 @@ const Index = () => {
         return;
       }
       if ('voucherNo' in response && (response.frontImage || response.backImage || response.cardType || response.trackData1 || response.trackData2 || response.mpData)) {
-        // Robust MICR fallback parser
-        const parseMicrFallback = (rawMicr?: string) => {
-          if (!rawMicr) return { checkNo: "", routingNo: "", accountNo: "", bCode: "" };
-          let checkNo = "";
-          let routingNo = "";
-          let accountNo = "";
-          let bCode = "";
-          const clean = rawMicr.trim();
-          const tIdx = clean.indexOf("T");
-          const uIdx = clean.lastIndexOf("U");
-
-          // 1. Account Number & Bank Code (Section between T and U / after U)
-          if (tIdx >= 0 && uIdx > tIdx) {
-            const betweenTU = clean.substring(tIdx + 1, uIdx).trim();
-            const afterU = clean.substring(uIdx + 1).trim();
-
-            const digitsBetween = betweenTU.replace(/[^0-9?]+/g, "");
-            if (digitsBetween.includes("?")) {
-              accountNo = digitsBetween.replace(/\?/g, "1").replace(/\D/g, "");
-            } else {
-              accountNo = betweenTU.replace(/\D/g, "");
-            }
-
-            bCode = afterU.replace(/\D/g, "");
-          } else if (tIdx >= 0) {
-            const afterT = clean.substring(tIdx + 1);
-            const afterBlocks = afterT.split(/[^0-9]+/).filter(Boolean);
-            if (afterBlocks.length >= 1) {
-              accountNo = afterBlocks[0];
-              if (afterBlocks.length >= 2) {
-                bCode = afterBlocks[1];
-              }
-            }
-          }
-
-          // 2. Check Number & Routing Number (Section before T)
-          if (tIdx >= 0) {
-            const beforeT = clean.substring(0, tIdx);
-            const digitBlocks = beforeT.split(/[^0-9]+/).filter(Boolean);
-            if (digitBlocks.length >= 1) {
-              routingNo = digitBlocks[digitBlocks.length - 1];
-              if (digitBlocks.length > 1) {
-                checkNo = digitBlocks.slice(0, digitBlocks.length - 1).join("");
-              } else if (routingNo.length > 6) {
-                checkNo = routingNo.substring(0, routingNo.length - 6);
-                routingNo = routingNo.substring(routingNo.length - 6);
-              }
-            }
-          } else {
-            const allParts = clean.split(/[^0-9]+/).filter(Boolean);
-            if (allParts.length >= 4) {
-              checkNo = allParts[0];
-              routingNo = allParts[1];
-              accountNo = allParts[2];
-              bCode = allParts[3];
-            } else if (allParts.length === 3) {
-              checkNo = allParts[0];
-              routingNo = allParts[1];
-              accountNo = allParts[2];
-            } else if (allParts.length === 2) {
-              checkNo = allParts[0];
-              accountNo = allParts[1];
-            } else if (allParts.length === 1) {
-              accountNo = allParts[0];
-            }
-          }
-
-          // 3. Normalize Check Number to standard 6 digits
-          if (checkNo.length < 6 && checkNo.startsWith("000")) {
-            if (checkNo === "000" || checkNo === "00034" || checkNo === "000345") checkNo = "000347";
-            else if (checkNo.startsWith("00004")) checkNo = "000045";
-            else checkNo = checkNo.padEnd(6, "0");
-          }
-
-          return { checkNo, routingNo, accountNo, bCode };
-        };
-
-        const fallback = parseMicrFallback(response.micr);
+        const currentVoucherNo = voucherData.voucherNo || voucherNoFromUrl || localStorage.getItem('voucherNo') || (response.voucherNo !== 'scan' ? response.voucherNo : '');
+        const parsed = parseMicr(response.micr);
 
         let updatedVoucherData = {
           ...voucherData,
+          voucherNo: currentVoucherNo,
           voucherType: response.voucherType,
           micr: response.micr,
           frontImage: response.frontImage,
@@ -985,10 +972,14 @@ const Index = () => {
           encryptedTrack1: response.encryptedTrack1,
           encryptedTrack2: response.encryptedTrack2,
           encryptedTrack3: response.encryptedTrack3,
-          checkNumber: response.checkNumber || fallback.checkNo,
-          routingNumber: response.routingNumber || fallback.routingNo,
-          accountNumber: response.accountNumber || fallback.accountNo,
-          bankCode: response.bankCode || fallback.bCode,
+          checkNumber: response.checkNumber || parsed.checkNumber,
+          routingNumber: response.routingNumber || parsed.routingNumber,
+          accountNumber: (appConfig.MICR_PARSER_FORMAT === 'SIERRA_LEONE' && parsed.accountNumber) ? parsed.accountNumber : (response.accountNumber || parsed.accountNumber),
+          bankCode: response.bankCode || parsed.bankCode,
+          countryCode: response.countryCode || parsed.countryCode || "",
+          stateCode: response.stateCode || parsed.stateCode || "",
+          branchCode: response.branchCode || parsed.branchCode || "",
+          transactionCode: response.transactionCode || parsed.transactionCode || "",
           checkDate: response.checkDate,
           amount: response.amount,
           amountWords: response.amountWords,
@@ -996,14 +987,14 @@ const Index = () => {
           signature: response.signature,
           payeeName: response.payeeName,
           bankName: response.bankName,
-          bankBranch: response.bankBranch,
+          bankBranch: response.bankBranch || parsed.branchCode || "",
           requiredSignatures: response.requiredSignatures,
           signaturesPresent: response.signaturesPresent,
           signatureStatus: response.signatureStatus,
           amountMismatch: response.amountMismatch
         };
 
-        if (docType === 'CHECK' && response.frontImage) {
+        if (appConfig.EXTRACTION_ENABLED === 'Y' && docType === 'CHECK' && response.frontImage) {
           try {
             setCurrentAction("Extracting cheque fields with Offline OpenCV & Tesseract Engine...");
             const ocrResponse = await api.extractChequeData(response.frontImage, {
@@ -1095,8 +1086,10 @@ const Index = () => {
     setLoadingProgress(25);
     setCurrentAction("Saving to database...");
     try {
+      const finalVoucherNo = voucherData.voucherNo || voucherNoFromUrl || localStorage.getItem('voucherNo') || voucherData.checkNumber;
       const saveData: VoucherData = {
         ...voucherData,
+        voucherNo: finalVoucherNo,
         narration: voucherData.narration,
         micr: docType === 'CHECK' ? voucherData.micr : "",
         frontImage: docType === 'CHECK' ? voucherData.frontImage : "",
@@ -1123,6 +1116,10 @@ const Index = () => {
         routingNumber: docType === 'CHECK' ? voucherData.routingNumber : "",
         accountNumber: docType === 'CHECK' ? voucherData.accountNumber : "",
         bankCode: docType === 'CHECK' ? voucherData.bankCode : "",
+        countryCode: docType === 'CHECK' ? (voucherData.countryCode || "") : "",
+        stateCode: docType === 'CHECK' ? (voucherData.stateCode || "") : "",
+        branchCode: docType === 'CHECK' ? (voucherData.branchCode || "") : "",
+        transactionCode: docType === 'CHECK' ? (voucherData.transactionCode || "") : "",
         checkDate: docType === 'CHECK' ? voucherData.checkDate : "",
         amount: docType === 'CHECK' ? voucherData.amount : "",
         amountWords: docType === 'CHECK' ? voucherData.amountWords : "",
@@ -1224,8 +1221,22 @@ const Index = () => {
   };
 
   const handleExit = () => {
-    window.location.reload();
+    try {
+      window.close();
+      setTimeout(() => {
+        window.open('', '_self', '');
+        window.close();
+      }, 100);
+    } catch (e) {
+      console.error("Window close error:", e);
+    }
   };
+
+  useEffect(() => {
+    if (docType === 'MSR') {
+      setIsCompareModalOpen(false);
+    }
+  }, [docType]);
 
   const handleOutsideClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) {
@@ -1249,8 +1260,8 @@ const Index = () => {
     <div className="min-h-screen flex flex-col bg-slate-50 selection:bg-blue-100 selection:text-blue-900">
       <header className="bg-blue-600 text-white px-5 py-3 shadow-xs flex items-center justify-between border-b border-blue-700">
         <div className="flex items-center space-x-3">
-          <div className="h-8 w-8 rounded-md bg-white/10 border border-white/20 flex items-center justify-center text-white shadow-inner">
-            <Scan className="h-4 w-4 animate-pulse" />
+          <div className="h-9 w-auto flex items-center justify-center p-1 bg-white/80 rounded-md border border-white/20 shadow-inner">
+            <img src={usgLogo} alt="Union Systems Global" className="h-7 w-auto object-contain" />
           </div>
           <div>
             <h1 className="text-sm font-semibold tracking-wide text-white">
@@ -1368,272 +1379,692 @@ const Index = () => {
           </div>
         </aside>
         <main className="flex-1 p-6 md:p-8 overflow-y-auto space-y-5 relative">
-          {/* Light Theme Minimalist Loader with Live Numerical Counter (%) */}
+          {/* Horizontal System-Font Progressive Flux Loader */}
           {isLoading && (
-            <div className="bg-white border border-slate-200/90 rounded-md p-3.5 shadow-sm flex items-center justify-between animate-fade-in relative overflow-hidden text-xs">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-slate-100">
-                <div 
-                  className="h-full bg-blue-600 transition-all duration-300 ease-out" 
-                  style={{ width: `${Math.max(5, Math.min(100, loadingProgress))}%` }}
-                />
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-7 h-7 rounded-md bg-blue-50 border border-blue-200/80 flex items-center justify-center shrink-0">
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-600" />
+            <div className="w-full flex flex-row items-center gap-3 py-2.5 px-3 bg-slate-50/80 rounded-lg border border-slate-200/90 font-sans animate-fade-in transition-all text-xs">
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="w-6 h-6 rounded-md bg-blue-50 border border-blue-200 flex items-center justify-center shrink-0">
+                  {currentAction.toLowerCase().includes('scan') ? (
+                    <Scan className="h-3.5 w-3.5 text-blue-600 animate-pulse" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5 text-blue-600 animate-spin" />
+                  )}
                 </div>
-                <div>
-                  <span className="font-semibold text-xs text-slate-900 block">{currentAction || 'Processing operation...'}</span>
-                  <span className="text-[10px] text-slate-500">Please wait while the scanner hardware executes the command</span>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-md shadow-2xs">
-                  {Math.max(5, Math.min(100, loadingProgress))}%
+                <span className="font-semibold text-slate-800 text-xs font-sans whitespace-nowrap">
+                  {currentAction || "Processing operation..."}
                 </span>
               </div>
+
+              <div className="flex-1">
+                <ProgressiveFluxLoader
+                  value={Math.max(5, Math.min(100, loadingProgress))}
+                  phases={[
+                    { at: 0, label: "initializing hardware" },
+                    { at: 25, label: "capturing document" },
+                    { at: 55, label: "parsing micr & image" },
+                    { at: 80, label: "extracting cheque data" },
+                    { at: 100, label: "operation complete" },
+                  ]}
+                  className="w-full"
+                />
+              </div>
+
+              <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200 shrink-0">
+                {Math.max(5, Math.min(100, loadingProgress))}%
+              </span>
             </div>
           )}
-          <div className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <InfoField
-                label="Voucher No"
-                value={voucherData.voucherNo}
-                readOnly={true}
-                required={isVoucherNoRequired}
-                compact={true}
-              />
-              <InfoField
-                label="Narration"
-                value={voucherData.narration}
-                onChange={(value) => setVoucherData(prev => ({ ...prev, narration: value }))}
-                readOnly={false}
-                placeholder="Enter narration details..."
-                compact={true}
-              />
-            </div>
-            {docType === 'CHECK' && hasScanned && (
-              <div className="bg-white p-4 rounded-md border border-slate-200/80 shadow-2xs space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end">
+
+          {/* Main Layout Container */}
+          <div className="flex flex-col lg:flex-row gap-6 items-start transition-all duration-300">
+            
+            {/* Left Content Area (Cheque Form, Inputs & Image Views) */}
+            <div className={`transition-all duration-300 w-full ${isCompareModalOpen && docType === 'CHECK' && voucherData.frontImage ? 'lg:w-[calc(100%-390px)] xl:w-[calc(100%-430px)]' : 'w-full'}`}>
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <InfoField
-                    label="MICR"
-                    value={voucherData.micr}
+                    label="Voucher No"
+                    value={voucherData.voucherNo}
                     readOnly={true}
+                    required={isVoucherNoRequired}
                     compact={true}
                   />
                   <InfoField
-                    label="Check Number"
-                    value={voucherData.checkNumber}
-                    readOnly={true}
+                    label="Narration"
+                    value={voucherData.narration}
+                    onChange={(value) => setVoucherData(prev => ({ ...prev, narration: value }))}
+                    readOnly={false}
+                    placeholder="Enter narration details..."
                     compact={true}
                   />
-                  <InfoField
-                    label="Routing Number"
-                    value={voucherData.routingNumber}
-                    readOnly={true}
-                    compact={true}
-                  />
-                  <InfoField
-                    label="Account Number"
-                    value={voucherData.accountNumber}
-                    readOnly={true}
-                    compact={true}
-                  />
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex-1">
-                      <InfoField
-                        label="Bank Code"
-                        value={voucherData.bankCode}
-                        readOnly={true}
-                        compact={true}
-                      />
-                    </div>
-                    <button
-                      onClick={() => setIsModalOpen(true)}
-                      className="relative group flex items-center justify-center space-x-1.5 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-md shadow-2xs transition-all cursor-pointer mb-2" 
-                    >
-                      <ShieldCheck className="w-4 h-4 text-blue-100 shrink-0" />
-                      <span>Advanced</span>
-                      <span className="absolute top-full mt-2 hidden group-hover:block bg-slate-900 text-white text-[10px] rounded py-1 px-2.5 whitespace-nowrap shadow-xl z-20 font-normal">
-                        View Check Details & Verification
-                      </span>
-                    </button>
-                  </div>
                 </div>
-              </div>
-            )}
-            <div className="bg-white p-5 rounded-md border border-slate-200/80 shadow-2xs transition-all">
-              {docType === 'MSR' ? (
-                <div className="space-y-4">
-                  <h2 className="text-lg font-semibold text-gray-700">Card Details</h2>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                        <InfoField
-                          label="MagnPrint Data"
-                          value={voucherData.mpData}
-                          readOnly={true}
-                          compact={true}
-                        />
-                        <InfoField
-                          label="Card Type"
-                          value={voucherData.cardType}
-                          readOnly={true}
-                          compact={true}
-                        />
-                        <InfoField
-                          label="Get Score"
-                          value={voucherData.getScore}
-                          readOnly={true}
-                          compact={true}
-                        />
+                {docType === 'CHECK' && hasScanned && (
+                  <div className="bg-white p-4 rounded-md border border-slate-200/80 shadow-2xs space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end">
+                      <InfoField
+                        label="MICR"
+                        value={voucherData.micr}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Check Number"
+                        value={voucherData.checkNumber}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Routing Number"
+                        value={voucherData.routingNumber}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <InfoField
+                        label="Account Number"
+                        value={voucherData.accountNumber}
+                        readOnly={true}
+                        compact={true}
+                      />
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1">
+                          <InfoField
+                            label={appConfig.MICR_PARSER_FORMAT === 'SIERRA_LEONE' ? "Transaction Code" : "Transit / Trans Code"}
+                            value={voucherData.transactionCode || voucherData.bankCode}
+                            readOnly={true}
+                            compact={true}
+                          />
+                        </div>
+                        {appConfig.EXTRACTION_ENABLED === 'Y' && (
+                          <button
+                            onClick={() => setIsModalOpen(true)}
+                            className="relative group flex items-center justify-center space-x-1.5 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-md shadow-2xs transition-all cursor-pointer mb-2" 
+                          >
+                            <ShieldCheck className="w-4 h-4 text-blue-100 shrink-0" />
+                            <span>Advanced</span>
+                            <span className="absolute top-full mt-2 hidden group-hover:block bg-slate-900 text-white text-[10px] rounded py-1 px-2.5 whitespace-nowrap shadow-xl z-20 font-normal">
+                              View Check Details & Verification
+                            </span>
+                          </button>
+                        )}
                       </div>
-                      <InfoField
-                        label="Track1 Data"
-                        value={voucherData.trackData1}
-                        readOnly={true}
-                        compact={true}
-                      />
-                      <InfoField
-                        label="Track2 Data"
-                        value={voucherData.trackData2}
-                        readOnly={true}
-                        compact={true}
-                      />
-                      <InfoField
-                        label="Track3 Data"
-                        value={voucherData.trackData3}
-                        readOnly={true}
-                        compact={true}
-                      />
-                      <button
-                        onClick={() => setShowAdvanced(true)}
-                        className="mt-2 flex items-center justify-center space-x-2 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-colors w-full md:w-auto"
-                      >
-                        <ShieldCheck className="w-4 h-4 text-blue-100" />
-                        <span>Show Advanced Diagnostics</span>
-                      </button>
                     </div>
-                    <div className="flex flex-col items-center">
-                      <div className="flex justify-center space-x-4 mb-4">
-                        <div className="flex items-center">
-                          <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.magnePrintStatus)} mr-1`}></span>
-                          <span className="text-xs font-medium">MagnPrint</span>
-                        </div>
-                        <div className="flex items-center">
-                          <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.track1Status, voucherData.trackData1)} mr-1`}></span>
-                          <span className="text-xs font-medium">Track1</span>
-                        </div>
-                        <div className="flex items-center">
-                          <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.track2Status, voucherData.trackData2)} mr-1`}></span>
-                          <span className="text-xs font-medium">Track2</span>
-                        </div>
-                        <div className="flex items-center">
-                          <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.track3Status, voucherData.trackData3)} mr-1`}></span>
-                          <span className="text-xs font-medium">Track3</span>
-                        </div>
-                      </div>
-                      <div className="flip-card max-w-sm">
-                        <div className="flip-card-inner">
-                          <div className="flip-card-front">
-                            <p className="heading_8264">{cardBrand}</p>
-                            <svg className="logo" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="36" height="36" viewBox="0 0 48 48" xmlSpace="preserve">
-                              {cardBrand === 'VISA' ? (
-                                <>
-                                  <path fill="#1565C0" d="M21,36l-1-7l-6-3l3-5l-5-1l-3-6l6,3l2,7l5,2l-2,5L21,36z"></path>
-                                  <path fill="#039BE5" d="M30,12l-3,6l-5-2l-2-7l6,1l3,5L30,12z"></path>
-                                  <path fill="#4FC3F7" d="M27,36l3-5l5,2l2-7l-6-1l-3,6L27,36z"></path>
-                                </>
-                              ) : cardBrand === 'AMEX' ? (
-                                <path fill="#006FCF" d="M6,8v32h36V8H6z M36.8,18l-3.6,6.4h3.2l-2.4,4.3h-6.4l-2.4-4.3h6.4l1.6-2.9h-6.4l-2.4-4.3h9.6L36.8,18z"></path>
-                              ) : (
-                                <>
-                                  <path fill="#ff9800" d="M32 10A14 14 0 1 0 32 38A14 14 0 1 0 32 10Z"></path>
-                                  <path fill="#d50000" d="M16 10A14 14 0 1 0 16 38A14 14 0 1 0 16 10Z"></path>
-                                  <path fill="#ff3d00" d="M18,24c0,4.755,2.376,8.95,6,11.48c3.624-2.53,6-6.725,6-11.48s-2.376-8.95-6-11.48 C20.376,15.05,18,19.245,18,24z"></path>
-                                </>
-                              )}
-                            </svg>
-                            <svg version="1.1" className="chip" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="30px" height="30px" viewBox="0 0 50 50" xmlSpace="preserve">
-                              <image id="image0" width="50" height="50" x="0" y="0" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAMAAAAp4XiDAAAABGdBTUEAALGPC/xhBQAAACBjSFJN
-                              AAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAB6VBMVEUAAACNcTiVeUKVeUOY
-                              fEaafEeUeUSYfEWZfEaykleyklaXe0SWekSZZjOYfEWYe0WXfUWXe0WcgEicfkiXe0SVekSXekSW
-                              ekKYe0a9nF67m12ZfUWUeEaXfESVekOdgEmVeUWWekSniU+VeUKVeUOrjFKYfEWliE6WeESZe0GS
-                              e0WYfES7ml2Xe0WXeESUeEOWfEWcf0eWfESXe0SXfEWYekSVeUKXfEWxklawkVaZfEWWekOUekOW
-                              ekSYfESZe0eXekWYfEWZe0WZe0eVeUSWeETAnmDCoWLJpmbxy4P1zoXwyoLIpWbjvXjivnjgu3bf
-                              u3beunWvkFWxkle/nmDivXiWekTnwXvkwHrCoWOuj1SXe0TEo2TDo2PlwHratnKZfEbQrWvPrWua
-                              fUfbt3PJp2agg0v0zYX0zYSfgkvKp2frxX7mwHrlv3rsxn/yzIPgvHfduXWXe0XuyIDzzISsjVO1
-                              lVm0lFitjVPzzIPqxX7duna0lVncuHTLqGjvyIHeuXXxyYGZfUayk1iyk1e2lln1zYTEomO2llrb
-                              tnOafkjFpGSbfkfZtXLhvHfkv3nqxH3mwXujhU3KqWizlFilh06khk2fgkqsjlPHpWXJp2erjVOh
-                              g0yWe0SliE+XekShhEvAn2D///+gx8TWAAAARnRSTlMACVCTtsRl7Pv7+vxkBab7pZv5+ZlL/UnU
-                              /f3SJCVe+Fx39naA9/75XSMh0/3SSkia+pil/KRj7Pr662JPkrbP7OLQ0JFOijI1MwAAAAFiS0dE
-                              orDd34wAAAAJcEhZcwAACxMAAAsTAQCanBgAAAAHdElNRQfnAg0IDx2lsiuJAAACLElEQVRIx2Ng
-                              GAXkAUYmZhZWPICFmYkRVQcbOwenmzse4MbFzc6DpIGXj8PD04sA8PbhF+CFaxEU8iWkAQT8hEVg
-                              OkTF/InR4eUVICYO1SIhCRMLDAoKDvFDVhUaEhwUFAjjSUlDdMiEhcOEItzdI6OiYxA6YqODIt3d
-                              I2DcuDBZsBY5eVTr4xMSYcyk5BRUOXkFsBZFJTQnp6alQxgZmVloUkrKYC0qqmji2WE5EEZuWB6a
-                              lKoKdi35YQUQRkFYPpFaCouKIYzi6EDitJSUlsGY5RWVRGjJLyxNy4ZxqtIqqvOxaVELQwZFZdkI
-                              JVU1RSiSalAt6rUwUBdWG1CP6pT6gNqwOrgCdQyHNYR5YQFhDXj8MiK1IAeyN6aORiyBjByVTc0F
-                              qBoKWpqwRCVSgilOaY2OaUPw29qjOzqLvTAchpos47u6EZyYnngUSRwpuTe6D+6qaFQdOPNLRzOM
-                              1dzhRZyW+CZouHk3dWLXglFcFIflQhj9YWjJGlZcaKAVSvjyPrRQ0oQVKDAQHlYFYUwIm4gqExGm
-                              BSkutaVQJeomwViTJqPK6OhCy2Q9sQBk8cY0DxjTJw0lAQWK6cOKfgNhpKK7ZMpUeF3jPa28BCET
-                              amiEqJKM+X1gxvWXpoUjVIVPnwErw71nmpgiqiQGBjNzbgs3j1nus+fMndc+Cwm0T52/oNR9lsdC
-                              S24ra7Tq1cbWjpXV3sHRCb1idXZ0sGdltXNxRateRwHRAACYHutzk/2I5QAAACV0RVh0ZGF0ZTpj
-                              cmVhdGUAMjAyMy0wMi0xM1QwODoxNToyOSswMDowMEUnN7UAAAAldEVYdGRhdGU6bW9kaWZ5ADIw
-                              MjMtMDItMTNUMDg6MTU6MjkrMDA6MDA4eo8JAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDIzLTAy
-                              LTEzVDA4OjE1OjI5KzAwOjAwY2+u1gAAAABJRU5ErkJggg=="></image>
-                            </svg>
-                            <svg version="1.1" className="contactless" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="25px" height="25px" viewBox="0 0 50 50" xmlSpace="preserve">
-                              <image id="image0" width="50" height="50" x="0" y="0" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAQAAAC0NkA6AAAABGdBTUEAALGPC/xhBQAAACBjSFJN
-                              AAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAAmJLR0QA/4ePzL8AAAAJcEhZ
-                              cwAACxMAAAsTAQCanBgAAAAHdElNRQfnAg0IEzgIwaKTAAADDklEQVRYw+1XS0iUURQ+f5qPyjQf
-                              lGRFEEFK76koKGxRbWyVVLSOgsCgwjZBJJYuKogSIoOonUK4q3U0WVBWFPZYiIE6kuArG3VGzK/F
-                              fPeMM/MLt99/NuHdfPd888/57jn3nvsQWWj/VcMlvMMd5KRTogqx9iCdIjUUmcGR9ImUYowyP3xN
-                              GQJoRLVaZ2DaZf8kyjEJALhI28ELioyiwC+Rc3QZwRYyO/DH51hQgWm6DMIh10KmD4u9O16K49it
-                              VoPOAmcGAWWOepXIRScAoJZ2Frro8oN+EyTT6lWkkg6msZfMSR35QTJmjU0g15tIGSJ08ZZMJkJk
-                              HpNZgSkyXosS13TkJpZ62mPIJvOSzC1bp8vRhhCakEk7G9/o4gmZdbpsTcKu0m63FbnBP9Qrc15z
-                              bkbemfgNDtEOI8NO5L5O9VYyRYgmJayZ9nPaxZrSjW4+F6Uw9yQqIiIZwhp2huQTf6OIvCZyGM6g
-                              DJBZbyXifJXr7FZjGXsdxADxI7HUJFB6iWvsIhFpkoiIiGTJfjJfiCuJg2ZEspq9EHGVpYgzKqwJ
-                              qSAOEwuJQ/pxPvE3cYltJCLdxBLiSKKIE5HxJKcTRNeadxfhDiuYw44zVs1dxKwRk/uCxIiQkxKB
-                              sSctRVAge9g1E15EHE6yRUaJecRxcWlukdRIbGFOSZCMWQA/iWauIP3slREHXPyliqBcrrD71Amz
-                              Z+rD1Mt2Yr8TZc/UR4/YtFnbijnHi3UrN9vKQ9rPaJf867ZiaqDB+czeKYmd3pNa6fuI75MiC0uX
-                              XSR5aEMf7s7a6r/PudVXkjFb/SsrCRfROk0Fx6+H1i9kkTGn/E1vEmt1m089fh+RKdQ5O+xNJPUi
-                              cUIjO0Dm7HwvErEr0YxeibL1StSh37STafE4I7zcBdRq1DiOkdmlTJVnkQTBTS7X1FYyvfO4piaI
-                              nKbDCDaT2anLudYXCRFsQBgAcIF2/Okwgvz5+Z4tsw118dzruvIvjhTB+HOuWy8UvovEH6beitBK
-                              xDyxm9MmISKCWrzB7bSlaqGlsf0FC0gMjzTg6GgAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjMtMDIt
-                              MTNUMDg6MTk6NTYrMDA6MDCjlq7LAAAAJXRFWHRkYXRlOm1oZGlmeQAyMDIzLTAyLTEzVDA4OjE5
-                              OjU2KzAwOjAw0ssWdwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyMy0wMi0xM1QwODoxOTo1Nisw
-                              MDowMIXeN6gAAAAASUVORK5CYII="></image>
-                            </svg>
-                            <p className="number">{cardNumber}</p>
-                            <p className="valid_thru">VALID THRU</p>
-                            <p className="date_8264">{expiryDate}</p>
-                            <p className="name">{cardholderName}</p>
+                  </div>
+                )}
+                <div className="bg-white p-5 rounded-md border border-slate-200/80 shadow-2xs transition-all">
+                  {docType === 'MSR' ? (
+                    <div className="space-y-4">
+                      <h2 className="text-lg font-semibold text-gray-700">Card Details</h2>
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <InfoField
+                              label="MagnPrint Data"
+                              value={voucherData.mpData}
+                              readOnly={true}
+                              compact={true}
+                            />
+                            <InfoField
+                              label="Card Type"
+                              value={voucherData.cardType}
+                              readOnly={true}
+                              compact={true}
+                            />
+                            <InfoField
+                              label="Get Score"
+                              value={voucherData.getScore}
+                              readOnly={true}
+                              compact={true}
+                            />
                           </div>
-                          <div className="flip-card-back">
-                            <div className="strip"></div>
-                            <div className="mstrip"></div>
-                            <div className="sstrip">
-                              <p className="code">***</p>
+                          <InfoField
+                            label="Track1 Data"
+                            value={voucherData.trackData1}
+                            readOnly={true}
+                            compact={true}
+                          />
+                          <InfoField
+                            label="Track2 Data"
+                            value={voucherData.trackData2}
+                            readOnly={true}
+                            compact={true}
+                          />
+                          <InfoField
+                            label="Track3 Data"
+                            value={voucherData.trackData3}
+                            readOnly={true}
+                            compact={true}
+                          />
+                          <button
+                            onClick={() => setShowAdvanced(true)}
+                            className="mt-2 flex items-center justify-center space-x-2 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-colors w-full md:w-auto"
+                          >
+                            <ShieldCheck className="w-4 h-4 text-blue-100" />
+                            <span>Show Advanced Diagnostics</span>
+                          </button>
+                        </div>
+                        <div className="flex flex-col items-center">
+                          <div className="flex justify-center space-x-4 mb-4">
+                            <div className="flex items-center">
+                              <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.magnePrintStatus)} mr-1`}></span>
+                              <span className="text-xs font-medium">MagnPrint</span>
+                            </div>
+                            <div className="flex items-center">
+                              <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.track1Status, voucherData.trackData1)} mr-1`}></span>
+                              <span className="text-xs font-medium">Track1</span>
+                            </div>
+                            <div className="flex items-center">
+                              <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.track2Status, voucherData.trackData2)} mr-1`}></span>
+                              <span className="text-xs font-medium">Track2</span>
+                            </div>
+                            <div className="flex items-center">
+                              <span className={`h-3 w-3 rounded-full ${getStatusColor(voucherData.track3Status, voucherData.trackData3)} mr-1`}></span>
+                              <span className="text-xs font-medium">Track3</span>
+                            </div>
+                          </div>
+                          <div className="flip-card max-w-sm">
+                            <div className="flip-card-inner">
+                              <div className="flip-card-front">
+                                <p className="heading_8264">{cardBrand}</p>
+                                <svg className="logo" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="36" height="36" viewBox="0 0 48 48" xmlSpace="preserve">
+                                  {cardBrand === 'VISA' ? (
+                                    <>
+                                      <path fill="#1565C0" d="M21,36l-1-7l-6-3l3-5l-5-1l-3-6l6,3l2,7l5,2l-2,5L21,36z"></path>
+                                      <path fill="#039BE5" d="M30,12l-3,6l-5-2l-2-7l6,1l3,5L30,12z"></path>
+                                      <path fill="#4FC3F7" d="M27,36l3-5l5,2l2-7l-6-1l-3,6L27,36z"></path>
+                                    </>
+                                  ) : cardBrand === 'AMEX' ? (
+                                    <path fill="#006FCF" d="M6,8v32h36V8H6z M36.8,18l-3.6,6.4h3.2l-2.4,4.3h-6.4l-2.4-4.3h6.4l1.6-2.9h-6.4l-2.4-4.3h9.6L36.8,18z"></path>
+                                  ) : (
+                                    <>
+                                      <path fill="#ff9800" d="M32 10A14 14 0 1 0 32 38A14 14 0 1 0 32 10Z"></path>
+                                      <path fill="#d50000" d="M16 10A14 14 0 1 0 16 38A14 14 0 1 0 16 10Z"></path>
+                                      <path fill="#ff3d00" d="M18,24c0,4.755,2.376,8.95,6,11.48c3.624-2.53,6-6.725,6-11.48s-2.376-8.95-6-11.48 C20.376,15.05,18,19.245,18,24z"></path>
+                                    </>
+                                  )}
+                                </svg>
+                                <svg version="1.1" className="chip" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="30px" height="30px" viewBox="0 0 50 50" xmlSpace="preserve">
+                                  <image id="image0" width="50" height="50" x="0" y="0" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAMAAAAp4XiDAAAABGdBTUEAALGPC/xhBQAAACBjSFJN
+                                  AAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAB6VBMVEUAAACNcTiVeUKVeUOY
+                                  fEaafEeUeUSYfEWZfEaykleyklaXe0SWekSZZjOYfEWYe0WXfUWXe0WcgEicfkiXe0SVekSXekSW
+                                  ekKYe0a9nF67m12ZfUWUeEaXfESVekOdgEmVeUWWekSniU+VeUKVeUOrjFKYfEWliE6WeESZe0GS
+                                  e0WYfES7ml2Xe0WXeESUeEOWfEWcf0eWfESXe0SXfEWYekSVeUKXfEWxklawkVaZfEWWekOUekOW
+                                  ekSYfESZe0eXekWYfEWZe0WZe0eVeUSWeETAnmDCoWLJpmbxy4P1zoXwyoLIpWbjvXjivnjgu3bf
+                                  u3beunWvkFWxkle/nmDivXiWekTnwXvkwHrCoWOuj1SXe0TEo2TDo2PlwHratnKZfEbQrWvPrWua
+                                  fUfbt3PJp2agg0v0zYX0zYSfgkvKp2frxX7mwHrlv3rsxn/yzIPgvHfduXWXe0XuyIDzzISsjVO1
+                                  lVm0lFitjVPzzIPqxX7duna0lVncuHTLqGjvyIHeuXXxyYGZfUayk1iyk1e2lln1zYTEomO2llrb
+                                  tnOafkjFpGSbfkfZtXLhvHfkv3nqxH3mwXujhU3KqWizlFilh06khk2fgkqsjlPHpWXJp2erjVOh
+                                  g0yWe0SliE+XekShhEvAn2D///+gx8TWAAAARnRSTlMACVCTtsRl7Pv7+vxkBab7pZv5+ZlL/UnU
+                                  /f3SJCVe+Fx39naA9/75XSMh0/3SSkia+pil/KRj7Pr662JPkrbP7OLQ0JFOijI1MwAAAAFiS0dE
+                                  orDd34wAAAAJcEhZcwAACxMAAAsTAQCanBgAAAAHdElNRQfnAg0IDx2lsiuJAAACLElEQVRIx2Ng
+                                  GAXkAUYmZhZWPICFmYkRVQcbOwenmzse4MbFzc6DpIGXj8PD04sA8PbhF+CFaxEU8iWkAQT8hEVg
+                                  OkTF/InR4eUVICYO1SIhCRMLDAoKDvFDVhUaEhwUFAjjSUlDdMiEhcOEItzdI6OiYxA6YqODIt3d
+                                  I2DcuDBZsBY5eVTr4xMSYcyk5BRUOXkFsBZFJTQnp6alQxgZmVloUkrKYC0qqmji2WE5EEZuWB6a
+                                  lKoKdi35YQUQRkFYPpFaCouKIYzi6EDitJSUlsGY5RWVRGjJLyxNy4ZxqtIqqvOxaVELQwZFZdkI
+                                  JVU1RSiSalAt6rUwUBdWG1CP6pT6gNqwOrgCdQyHNYR5YQFhDXj8MiK1IAeyN6aORiyBjByVTc0F
+                                  qBoKWpqwRCVSgilOaY2OaUPw29qjOzqLvTAchpos47u6EZyYnngUSRwpuTe6D+6qaFQdOPNLRzOM
+                                  1dzhRZyW+CZouHk3dWLXglFcFIflQhj9YWjJGlZcaKAVSvjyPrRQ0oQVKDAQHlYFYUwIm4gqExGm
+                                  BSkutaVQJeomwViTJqPK6OhCy2Q9sQBk8cY0DxjTJw0lAQWK6cOKfgNhpKK7ZMpUeF3jPa28BCET
+                                  amiEqJKM+X1gxvWXpoUjVIVPnwErw71nmpgiqiQGBjNzbgs3j1nus+fMndc+Cwm0T52/oNR9lsdC
+                                  S24ra7Tq1cbWjpXV3sHRCb1idXZ0sGdltXNxRateRwHRAACYHutzk/2I5QAAACV0RVh0ZGF0ZTpj
+                                  cmVhdGUAMjAyMy0wMi0xM1QwODoxNToyOSswMDowMEUnN7UAAAAldEVYdGRhdGU6bW9kaWZ5ADIw
+                                  MjMtMDItMTNUMDg6MTU6MjkrMDA6MDA8eo8JAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDIzLTAy
+                                 LTEzVDA4OjE1OjI5KzAwOjAwY2+u1gAAAABJRU5ErkJggg=="></image>
+                                </svg>
+                                <svg version="1.1" className="contactless" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px" width="25px" height="25px" viewBox="0 0 50 50" xmlSpace="preserve">
+                                  <image id="image0" width="50" height="50" x="0" y="0" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAQAAAC0NkA6AAAABGdBTUEAALGPC/xhBQAAACBjSFJN
+                                  AAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAAmJLR0QA/4ePzL8AAAAJcEhZ
+                                  cwAACxMAAAsTAQCanBgAAAAHdElNRQfnAg0IEzgIwaKTAAADDklEQVRYw+1XS0iUURQ+f5qPyjQf
+                                  lGRFEEFK76koKGxRbWyVVLSOgsCgwjZBJJYuKogSIoOonUK4q3U0WVBWFPZYiIE6kuArG3VGzK/F
+                                  fPeMM/MLt99/NuHdfPd888/57jn3nvsQWWj/VcMlvMMd5KRTogqx9iCdIjUUmcGR9ImUYowyP3xN
+                                  GQJoRLVaZ2DaZf8kyjEJALhI28ELioyiwC+Rc3QZwRYyO/DH51hQgWm6DMIh10KmD4u9O16K49it
+                                  VoPOAmcGAWWOepXIRScAoJZ2Frro8oN+EyTT6lWkkg6msZfMSR35QTJmjU0g15tIGSJ08ZZMJkJk
+                                  HpNZgSkyXosS13TkJpZ62mPIJvOSzC1bp8vRhhCakEk7G9/o4gmZdbpsTcKu0m63FbnBP9Qrc15z
+                                  bkbemfgNDtEOI8NO5L5O9VYyRYgmJayZ9nPaxZrSjW4+F6Uw9yQqIiIZwhp2huQTf6OIvCZyGM6g
+                                  DJBZbyXifJXr7FZjGXsdxADxI7HUJFB6iWvsIhFpkoiIiGTJfjJfiCuJg2ZEspq9EHGVpYgzKqwJ
+                                  qSAOEwuJQ/pxPvE3cYltJCLdxBLiSKKIE5HxJKcTRNeadxfhDiuYw44zVs1dxKwRk/uCxIiQkxKB
+                                  sSctRVAge9g1E15EHE6yRUaJecRxcWlukdRIbGFOSZCMWQA/iWauIP3slREHXPyliqBcrrD71Amz
+                                  Z+rD1Mt2Yr8TZc/UR4/YtFnbijnHi3UrN9vKQ9rPaJf867ZiaqDB+czeKYmd3pNa6fuI75MiC0uX
+                                  XSR5aEMf7s7a6r/PudVXkjFb/SsrCRfROk0Fx6+H1i9kkTGn/E1vEmt1m089fh+RKdQ5O+xNJPUi
+                                  cUIjO0Dm7HwvErEr0YxeibL1StSh37STafE4I7zcBdRq1DiOkdmlTJVnkQTBTS7X1FYyvfO4piaI
+                                  nKbDCDaT2anLudYXCRFsQBgAcIF2/Okwgvz5+Z4tsw118dzruvIvjhTB+HOuWy8UvovEH6beitBK
+                                  xDyxm9MmISKCWrzB7bSlaqGlsf0FC0gMjzTg6GgAAAAldEVYdGRhdGU6Y3JlYXRlADIwMjMtMDIt
+                                  MTNUMDg6MTk6NTYrMDA6MDCjlq7LAAAAJXRFWHRkYXRlOm1oZGlmeQAyMDIzLTAyLTEzVDA4OjE5
+                                  OjU2KzAwOjAw0ssWdwAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyMy0wMi0xM1QwODoxOTo1Nisw
+                                  MDowMIXeN6gAAAAASUVORUSCYII="></image>
+                                </svg>
+                                <p className="number">{cardNumber}</p>
+                                <p className="valid_thru">VALID THRU</p>
+                                <p className="date_8264">{expiryDate}</p>
+                                <p className="name">{cardholderName}</p>
+                              </div>
+                              <div className="flip-card-back">
+                                <div className="strip"></div>
+                                <div className="mstrip"></div>
+                                <div className="sstrip">
+                                  <p className="code">***</p>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
                       </div>
                     </div>
+                  ) : (
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <ImageDisplay 
+                        label="Front" 
+                        imageData={voucherData.frontImage} 
+                        onCompare={appConfig.SIGNATURE_VALIDATION_ENABLED === 'Y' ? () => setIsCompareModalOpen(true) : undefined} 
+                      />
+                      <ImageDisplay label="Back" imageData={voucherData.backImage} />
+                    </div>
+                  )}
+                </div>
+                <footer className="py-4 text-center">
+                  <p className="text-blue-600 text-sm italic animate-pulse">Powered by X100</p>
+                </footer>
+              </div>
+            </div>
+
+            {/* Right Aside (Automatic Signature Validation) - Only rendered in CHECK mode */}
+            {isCompareModalOpen && docType === 'CHECK' && voucherData.frontImage && (
+              <aside 
+                onMouseEnter={() => {
+                  setIsAsideHovered(true);
+                  setCollapseTimer(30);
+                }}
+                onMouseLeave={() => setIsAsideHovered(false)}
+                className="w-full lg:w-[390px] xl:w-[430px] bg-white rounded-xl border border-slate-200/90 shadow-md flex flex-col shrink-0 overflow-hidden transition-all duration-300 animate-in slide-in-from-right"
+              >
+                
+                {/* Header */}
+                <div className="bg-blue-600 text-white px-4 py-3 flex items-center justify-between shadow-sm border-b border-blue-700">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-1.5 bg-blue-700 rounded-lg border border-blue-500/50">
+                      <ShieldCheck className="h-4 w-4 text-white" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h2 className="text-xs font-bold tracking-wide text-white">Signature Validation</h2>
+                        <span 
+                          className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full flex items-center gap-1 font-mono shadow-2xs transition-colors ${
+                            isAsideHovered || isCardFlipped || isLoadingSignatures || isRecalculatingScores
+                              ? 'bg-emerald-600 text-white border border-emerald-400/50'
+                              : 'bg-blue-700/90 text-blue-100 border border-blue-400/40'
+                          }`}
+                          title={isAsideHovered || isCardFlipped ? "Timer paused while you are actively working" : "Auto-collapses after 30s of inactivity"}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                          {isAsideHovered || isCardFlipped ? 'ACTIVE' : `${collapseTimer}s`}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-blue-100">
+                        Acc: <span className="font-mono font-bold text-white">{voucherData.accountNumber || 'N/A'}</span>
+                        {voucherData.checkNumber && (
+                          <>
+                            <span className="mx-1">•</span>
+                            No: <span className="font-mono text-white">{voucherData.checkNumber}</span>
+                          </>
+                        )}
+                        {voucherData.amount && (
+                          <>
+                            <span className="mx-1">•</span>
+                            Amt: <span className="font-mono text-emerald-300 font-bold">GHS {voucherData.amount}</span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    {mandateData?.account_mandate && (
+                      <span className="px-2 py-0.5 bg-blue-700 text-blue-100 text-[9px] font-semibold rounded-full border border-blue-500">
+                        {mandateData.account_mandate}
+                      </span>
+                    )}
+                    <TooltipProvider delayDuration={100}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={() => setIsCompareModalOpen(false)}
+                            className="p-1 bg-blue-700 hover:bg-red-600 text-white rounded-full transition-colors cursor-pointer"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="left" className="bg-slate-900 text-white font-sans text-[11px] font-medium px-2.5 py-1 rounded-md border border-slate-700 shadow-xl">
+                          Collapse Signature Validation
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </div>
-              ) : (
-                <div className="grid md:grid-cols-2 gap-4">
-                  <ImageDisplay 
-                    label="Front" 
-                    imageData={voucherData.frontImage} 
-                    onCompare={() => setIsCompareModalOpen(true)} 
-                  />
-                  <ImageDisplay label="Back" imageData={voucherData.backImage} />
+
+                {/* Scrollable Content Body (Stacked vertically: Scanned Signature TOP, Account Mandates BOTTOM) */}
+                <div className="p-3.5 space-y-4 max-h-[calc(100vh-140px)] overflow-y-auto bg-slate-50/70">
+                  
+                  {/* TOP SECTION: Scanned Cheque Signature */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-3 relative">
+                    {!isCardFlipped ? (
+                      <div className="flex flex-col space-y-3 animate-in fade-in duration-300">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                            <Scan className="h-3.5 w-3.5 text-blue-600" /> Scanned Cheque Signature
+                          </span>
+                          
+                          <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  onClick={() => handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto')}
+                                  disabled={activeCropMode === 'auto' && !customCroppedSig}
+                                  className={`px-2 py-0.5 text-[9px] font-bold rounded-full transition-all flex items-center gap-1 shadow-2xs ${
+                                    activeCropMode === 'auto'
+                                      ? 'bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200'
+                                      : 'bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200'
+                                  }`}
+                                >
+                                  <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                                  {activeCropMode === 'auto' ? 'Auto OpenCV Crop' : 'Custom Crop'}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="bg-slate-900 text-white font-sans text-[11px] font-medium px-2.5 py-1 rounded-md border border-slate-700 shadow-xl">
+                                {!customCroppedSig ? 'Map a custom crop area first to toggle views' : 'Click to switch between OpenCV auto-crop and custom ROI crop'}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+
+                        <TooltipProvider delayDuration={100}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div
+                                onClick={() => {
+                                  if (customCroppedSig) {
+                                    handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto');
+                                  } else {
+                                    toast({
+                                      title: "Map Custom Area First",
+                                      description: "Click 'Map Custom Area' below to draw your custom signature crop area.",
+                                    });
+                                  }
+                                }}
+                                className="bg-slate-950 rounded-lg p-2.5 flex items-center justify-center min-h-[160px] border border-slate-800 shadow-inner relative group cursor-pointer overflow-hidden transition-all hover:border-blue-500/50"
+                              >
+                                {croppedChequeSig ? (
+                                  <img
+                                    src={croppedChequeSig}
+                                    alt="Cropped Cheque Signature"
+                                    className="max-h-36 max-w-full object-contain filter drop-shadow-md transition-transform duration-300 group-hover:scale-105"
+                                  />
+                                ) : (
+                                  <div className="text-slate-400 text-xs">No cropped signature</div>
+                                )}
+
+                                {isRecalculatingScores && (
+                                  <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center gap-2 z-10 animate-in fade-in duration-200">
+                                    <RefreshCw className="h-5 w-5 text-blue-400 animate-spin" />
+                                    <span className="text-[10px] text-slate-300 font-semibold tracking-wide">Recalculating Match...</span>
+                                  </div>
+                                )}
+
+                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 text-white text-[9px] px-2 py-0.5 rounded-full flex items-center gap-1 font-semibold pointer-events-none shadow-md backdrop-blur-xs border border-slate-700">
+                                  <RefreshCw className="h-3 w-3 text-blue-400" /> Tap Image to Flip
+                                </div>
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="bg-slate-900 text-white font-sans text-[11px] font-medium px-2.5 py-1 rounded-md border border-slate-700 shadow-xl">
+                              Click image to flip between Auto OpenCV crop and Custom Mapped crop
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+
+                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                          <span className="text-[10px] text-slate-400">Full-Color Signature Crop</span>
+                          <div className="flex items-center gap-2">
+                            <TooltipProvider delayDuration={100}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    onClick={async () => {
+                                      setIsRecalculatingScores(true);
+                                      const cropRes = await api.cropSignature(`data:image/jpeg;base64,${voucherData.frontImage}`);
+                                      if (cropRes.success && cropRes.croppedImage) {
+                                        const formattedSig = cropRes.croppedImage.startsWith('data:') ? cropRes.croppedImage : `data:image/jpeg;base64,${cropRes.croppedImage}`;
+                                        setAutoCroppedSig(formattedSig);
+                                        setCroppedChequeSig(formattedSig);
+                                        setActiveCropMode('auto');
+                                      }
+                                      setIsRecalculatingScores(false);
+                                    }}
+                                    className="flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold text-[10px]"
+                                  >
+                                    <RefreshCw className="h-3 w-3" /> Re-crop
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="bg-slate-900 text-white font-sans text-[11px] font-medium px-2.5 py-1 rounded-md border border-slate-700 shadow-xl">
+                                  Reset default automatic signature crop
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+
+                            <TooltipProvider delayDuration={100}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    onClick={() => setIsCardFlipped(true)}
+                                    className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] px-2.5 py-1 rounded-md shadow-2xs transition-all active:scale-95"
+                                  >
+                                    <Crop className="h-3 w-3" /> Map Custom Area
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top" className="bg-slate-900 text-white font-sans text-[11px] font-medium px-2.5 py-1 rounded-md border border-slate-700 shadow-xl">
+                                  Draw custom ROI bounding box over cheque front
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col min-h-[260px] animate-in fade-in duration-300">
+                        {voucherData.frontImage ? (
+                          <SignatureCropOverlay
+                            imageSrc={`data:image/jpeg;base64,${voucherData.frontImage}`}
+                            initialRoi={{ x: 0.58, y: 0.52, w: 0.40, h: 0.30 }}
+                            onApplyCrop={handleCustomCropApply}
+                            onClose={() => setIsCardFlipped(false)}
+                            isLoading={isLoadingSignatures}
+                          />
+                        ) : (
+                          <div className="py-8 text-center text-slate-400 text-xs">
+                            No scanned cheque front image available for cropping.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* BOTTOM SECTION: Account Mandate Specimen Signatures */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                        <User className="h-3.5 w-3.5 text-emerald-600" /> Mandate Specimen Signatures
+                      </span>
+                      <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                        {mandateData?.enq_details?.length || 0} Signator{mandateData?.enq_details?.length === 1 ? 'y' : 'ies'}
+                      </span>
+                    </div>
+
+                    {isLoadingSignatures ? (
+                      <div className="flex flex-col items-center justify-center py-10 space-y-2">
+                        <RefreshCw className="h-6 w-6 text-blue-600 animate-spin" />
+                        <p className="text-xs font-medium text-slate-600">Loading mandate signatures...</p>
+                      </div>
+                    ) : !voucherData.accountNumber || !voucherData.accountNumber.trim() ? (
+                      <div className="py-8 px-3 text-center bg-amber-50/70 rounded-lg border border-amber-200 text-amber-900 space-y-2">
+                        <AlertTriangle className="h-6 w-6 text-amber-600 mx-auto" />
+                        <h4 className="text-xs font-bold">No Account Number Detected</h4>
+                        <p className="text-[11px] text-amber-800">
+                          Signature mandate verification requires a valid account number.
+                        </p>
+                      </div>
+                    ) : !mandateData?.enq_details || mandateData.enq_details.length === 0 ? (
+                      <div className="py-8 px-3 text-center bg-slate-100/80 rounded-lg border border-slate-200 text-slate-700 space-y-2">
+                        <AlertCircle className="h-6 w-6 text-slate-400 mx-auto" />
+                        <h4 className="text-xs font-bold">No Registered Mandates Found</h4>
+                        <p className="text-[11px] text-slate-600">
+                          No registered mandate signatures found for account <span className="font-mono font-bold">{voucherData.accountNumber}</span>.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 max-h-[380px] overflow-y-auto pr-0.5">
+                        {mandateData.enq_details.map((item: any, idx: number) => {
+                          const photoUrl = item.photo ? (item.photo.startsWith('data:') ? item.photo : `data:image/jpeg;base64,${item.photo}`) : (item.pix ? `data:image/jpeg;base64,${item.pix}` : '');
+                          const sigUrl = item.signature ? (item.signature.startsWith('data:') ? item.signature : `data:image/jpeg;base64,${item.signature}`) : '';
+                          const scoreObj = comparisonScores.find(s => s.index === idx);
+                          const similarity = scoreObj?.similarity || 0;
+                          const percentage = scoreObj?.percentage || '0%';
+                          const isHighMatch = similarity >= 70;
+                          const isModerate = similarity >= 50 && similarity < 70;
+
+                          const rawChequeAmt = voucherData.amount || '0';
+                          const chequeAmountValue = parseFloat(rawChequeAmt.toString().replace(/[^0-9.]/g, '')) || 0;
+                          const itemLimitVal = item.limit !== undefined && item.limit !== null ? parseFloat(item.limit.toString().replace(/[^0-9.]/g, '')) : (item.amtlimit !== undefined ? parseFloat(item.amtlimit.toString()) : undefined);
+                          const isLimitExceeded = itemLimitVal !== undefined && itemLimitVal > 0 && chequeAmountValue > itemLimitVal;
+                          const signCategory = (item.sign_category || item.category || 'N/A').trim();
+                          const isEligible = !isLimitExceeded;
+
+                          return (
+                            <div
+                              key={idx}
+                              className={`p-3 rounded-lg border transition-all ${
+                                isHighMatch
+                                  ? 'bg-emerald-50/50 border-emerald-200'
+                                  : isModerate
+                                  ? 'bg-amber-50/50 border-amber-200'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2 mb-2">
+                                <div className="flex items-center space-x-2.5">
+                                  {photoUrl ? (
+                                    <img
+                                      src={photoUrl}
+                                      alt={`Signatory ${idx + 1}`}
+                                      className="w-10 h-10 rounded-full object-cover border border-white shadow-2xs"
+                                    />
+                                  ) : (
+                                    <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold text-xs">
+                                      S{idx + 1}
+                                    </div>
+                                  )}
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <h4 className="text-xs font-bold text-slate-900">
+                                        {item.relation_no ? `Relation #${item.relation_no}` : `Signatory ${idx + 1}`}
+                                      </h4>
+                                      
+                                      <TooltipProvider delayDuration={150}>
+                                        {isEligible ? (
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <span className="text-[8px] font-extrabold uppercase text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded-full flex items-center gap-0.5 cursor-help">
+                                                <Check className="w-2 h-2 text-emerald-700" /> Eligible
+                                              </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white border border-slate-700 shadow-xl">
+                                              Active authorized signatory for this cheque
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        ) : (
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <span className="text-[8px] font-extrabold uppercase text-red-700 bg-red-100 border border-red-300 px-1.5 py-0.5 rounded-full flex items-center gap-0.5 cursor-help">
+                                                <AlertTriangle className="w-2 h-2 text-red-600 animate-pulse" /> Not Allowed
+                                              </span>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white border border-slate-700 shadow-xl">
+                                              Cheque amount exceeds allowed limit for this signatory
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        )}
+                                      </TooltipProvider>
+                                    </div>
+
+                                    <TooltipProvider delayDuration={150}>
+                                      <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[10px] text-slate-600">
+                                        <div className="flex items-center gap-0.5">
+                                          <span className="font-medium text-slate-400">Cat:</span>
+                                          <span className="font-bold text-slate-900">{signCategory}</span>
+                                        </div>
+                                        <div className="flex items-center gap-0.5">
+                                          <span className="font-medium text-slate-400">Limit:</span>
+                                          <span className={`font-bold ${isLimitExceeded ? 'text-red-600' : 'text-slate-900'}`}>
+                                            {itemLimitVal !== undefined && itemLimitVal > 0 
+                                              ? `GHS ${itemLimitVal.toLocaleString('en-US')}` 
+                                              : 'No Limit'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </TooltipProvider>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-col items-end">
+                                  {isRecalculatingScores ? (
+                                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-200 text-slate-700 flex items-center gap-1 animate-pulse">
+                                      <RefreshCw className="h-2.5 w-2.5 animate-spin text-blue-600" />
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className={`px-2 py-0.5 text-[10px] font-bold rounded-full flex items-center gap-1 ${
+                                        isHighMatch
+                                          ? 'bg-emerald-600 text-white shadow-2xs'
+                                          : isModerate
+                                          ? 'bg-amber-500 text-white'
+                                          : 'bg-slate-200 text-slate-700'
+                                      }`}
+                                    >
+                                      {isHighMatch && <CheckCircle2 className="h-3 w-3" />}
+                                      {percentage}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {sigUrl && (
+                                <div className="bg-white rounded-md p-1.5 border border-slate-200 flex items-center justify-center h-20 mt-1.5">
+                                  <img
+                                    src={sigUrl}
+                                    alt={`Specimen Signature ${idx + 1}`}
+                                    className="max-h-16 max-w-full object-contain filter contrast-125"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
                 </div>
-              )}
-            </div>
-            <footer className="py-4 text-center">
-              <p className="text-blue-600 text-sm italic animate-pulse">Powered by X100</p>
-            </footer>
+
+                {/* Footer */}
+                <div className="bg-white border-t border-slate-200 px-3.5 py-2.5 flex items-center justify-between">
+                  <div className="text-[10px] text-slate-500 font-medium">
+                    Mandate Verification
+                  </div>
+                  <button
+                    onClick={() => setIsCompareModalOpen(false)}
+                    className="px-3.5 py-1.5 text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow-2xs transition-colors"
+                  >
+                    Close Validation
+                  </button>
+                </div>
+              </aside>
+            )}
+
           </div>
           {isFaceRecognitionOpen && (
             <aside
@@ -2084,490 +2515,6 @@ const Index = () => {
                     className="px-5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-colors"
                   >
                     Close Diagnostics
-                  </button>
-                </div>
-
-              </div>
-            </div>
-          )}
-          {isCompareModalOpen && voucherData.frontImage && (
-            <div
-              className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4"
-              onClick={handleOutsideClick}
-            >
-              <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-gray-100 animate-in fade-in zoom-in-95 duration-200">
-                
-                {/* Header */}
-                <div className="bg-blue-500 text-white px-6 py-4 flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-blue-600/30 rounded-lg border border-blue-400/30">
-                      <ShieldCheck className="h-6 w-6 text-blue-200" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-bold tracking-tight">Signature Validation & Mandate Verification</h2>
-                      <p className="text-xs text-slate-200">
-                        Account: <span className="font-mono text-blue-300 font-semibold">{voucherData.accountNumber || 'N/A'}</span>
-                        <span className="mx-2">•</span>
-                        Cheque No: <span className="font-mono text-slate-200">{voucherData.checkNumber || 'N/A'}</span>
-                        {voucherData.amount && (
-                          <>
-                            <span className="mx-2">•</span>
-                            Amount: <span className="font-mono text-emerald-400 font-bold">GHS {voucherData.amount}</span>
-                          </>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    {mandateData?.account_mandate && (
-                      <span className="px-3 py-1 bg-blue-500/20 text-blue-200 text-xs font-semibold rounded-full border border-blue-400/50">
-                        Mandate: {mandateData.account_mandate}
-                      </span>
-                    )}
-                    <button
-                      onClick={() => setIsCompareModalOpen(false)}
-                      className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-red-600 rounded-lg transition-colors"
-                    >
-                      <X className="h-5 w-5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Body Content */}
-                <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
-                  {isLoadingSignatures ? (
-                    <div className="flex flex-col items-center justify-center py-16 space-y-3">
-                      <RefreshCw className="h-8 w-8 text-blue-600 animate-spin" />
-                      <p className="text-sm font-medium text-slate-600">Processing cheque signature crop & loading account mandates...</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-                      
-                      {/* Left Column: Scanned Cheque Signature with 3D Card Flip Interactive Mapper */}
-                      <div className="md:col-span-5 flex flex-col space-y-4">
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-full relative min-h-[380px]">
-                          {!isCardFlipped ? (
-                            /* FRONT FACE: Scanned Cheque Signature Preview & Crop Mode Toggle */
-                            <div className="flex flex-col h-full animate-in fade-in duration-300">
-                              <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
-                                <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                                  <Scan className="h-4 w-4 text-blue-600" /> Scanned Cheque Signature
-                                </span>
-                                
-                                {/* Single Dynamic Mode Indicator Button (Auto OpenCV vs Custom Mapped) */}
-                                <button
-                                  onClick={() => handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto')}
-                                  disabled={activeCropMode === 'auto' && !customCroppedSig}
-                                  className={`px-1.5 py-1 text-[10px] font-bold rounded-full transition-all flex items-center gap-1 shadow-sm ${
-                                    activeCropMode === 'auto'
-                                      ? 'bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200'
-                                      : 'bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200'
-                                  }`}
-                                  title={!customCroppedSig ? 'Map a custom crop area to toggle views' : 'Click to toggle crop mode'}
-                                >
-                                  <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                                  {activeCropMode === 'auto' ? 'Auto OpenCV Crop' : 'Custom Mapped Crop'}
-                                </button>
-                              </div>
-
-                              {/* Cropped Image Container: Tap / Click image area to flip views */}
-                              <div
-                                onClick={() => {
-                                  if (customCroppedSig) {
-                                    handleToggleCropMode(activeCropMode === 'auto' ? 'custom' : 'auto');
-                                  } else {
-                                    toast({
-                                      title: "Map Custom Area First",
-                                      description: "Click 'Map Custom Area' below to draw your custom signature crop area.",
-                                    });
-                                  }
-                                }}
-                                className="flex-1 bg-slate-950 rounded-lg p-3 flex items-center justify-center min-h-[220px] border border-slate-800 shadow-inner relative group cursor-pointer overflow-hidden transition-all hover:border-blue-500/50"
-                                title="Click image to flip between Auto OpenCV crop and Custom Mapped crop"
-                              >
-                                {croppedChequeSig ? (
-                                  <img
-                                    src={croppedChequeSig}
-                                    alt="Cropped Cheque Signature"
-                                    className="max-h-48 max-w-full object-contain filter drop-shadow-md transition-transform duration-300 group-hover:scale-105"
-                                  />
-                                ) : (
-                                  <div className="text-slate-400 text-xs">No cropped signature</div>
-                                )}
-
-                                {/* Micro Loading Overlay over Cropped Image */}
-                                {isRecalculatingScores && (
-                                  <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center gap-2 z-10 animate-in fade-in duration-200">
-                                    <RefreshCw className="h-6 w-6 text-blue-400 animate-spin" />
-                                    <span className="text-[11px] text-slate-300 font-semibold tracking-wide">Recalculating Crop Match...</span>
-                                  </div>
-                                )}
-
-                                {/* Floating Hover Hint Badge */}
-                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 text-white text-[10px] px-2.5 py-1 rounded-full flex items-center gap-1.5 font-semibold pointer-events-none shadow-md backdrop-blur-sm border border-slate-700">
-                                  <RefreshCw className="h-3 w-3 text-blue-400" /> Tap Image to Flip
-                                </div>
-                              </div>
-
-                              {/* Footer Actions Bar */}
-                              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                                <span className="text-[11px] text-slate-400">Enhanced Contrast CLAHE</span>
-                                <div className="flex items-center gap-3">
-                                  <button
-                                    onClick={async () => {
-                                      setIsRecalculatingScores(true);
-                                      const cropRes = await api.cropSignature(`data:image/jpeg;base64,${voucherData.frontImage}`);
-                                      if (cropRes.success && cropRes.croppedImage) {
-                                        const formattedSig = cropRes.croppedImage.startsWith('data:') ? cropRes.croppedImage : `data:image/jpeg;base64,${cropRes.croppedImage}`;
-                                        setAutoCroppedSig(formattedSig);
-                                        setCroppedChequeSig(formattedSig);
-                                        setActiveCropMode('auto');
-                                      }
-                                      setIsRecalculatingScores(false);
-                                    }}
-                                    className="flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold text-[11px]"
-                                    title="Reset default automatic signature crop"
-                                  >
-                                    <RefreshCw className="h-3 w-3" /> Re-crop
-                                  </button>
-                                  <button
-                                    onClick={() => setIsCardFlipped(true)}
-                                    className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] px-2.5 py-1 rounded-md shadow-sm transition-all active:scale-95"
-                                  >
-                                    <Crop className="h-3.5 w-3.5" /> Map Custom Area
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            /* BACK FACE: Interactive Crop Instrument Overlay */
-                            <div className="flex flex-col h-full animate-in fade-in duration-300">
-                              {voucherData.frontImage ? (
-                                <SignatureCropOverlay
-                                  imageSrc={`data:image/jpeg;base64,${voucherData.frontImage}`}
-                                  initialRoi={{ x: 0.45, y: 0.52, w: 0.55, h: 0.30 }}
-                                  onApplyCrop={handleCustomCropApply}
-                                  onClose={() => setIsCardFlipped(false)}
-                                  isLoading={isLoadingSignatures}
-                                />
-                              ) : (
-                                <div className="py-12 text-center text-slate-400 text-xs">
-                                  No scanned cheque front image available for cropping.
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Right Column: Mandate Specimen Signatures & Photos */}
-                      <div className="md:col-span-7 flex flex-col space-y-4">
-                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-full">
-                          <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
-                            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-                              <User className="h-4 w-4 text-emerald-600" /> Account Mandate Specimen Signatures
-                            </span>
-                            <span className="text-xs font-semibold text-slate-700">
-                              {mandateData?.enq_details?.length || 0} Signator{mandateData?.enq_details?.length === 1 ? 'y' : 'ies'}
-                            </span>
-                          </div>
-
-                          {(!mandateData?.enq_details || mandateData.enq_details.length === 0) ? (
-                            <div className="py-12 text-center text-slate-400 text-sm">
-                              No specimen mandate signatures registered for account <span className="font-mono text-slate-600 font-semibold">{voucherData.accountNumber || 'N/A'}</span>.
-                            </div>
-                          ) : (
-                            <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
-                              {mandateData.enq_details.map((item: any, idx: number) => {
-                                const photoUrl = item.photo ? (item.photo.startsWith('data:') ? item.photo : `data:image/jpeg;base64,${item.photo}`) : (item.pix ? `data:image/jpeg;base64,${item.pix}` : '');
-                                const sigUrl = item.signature ? (item.signature.startsWith('data:') ? item.signature : `data:image/jpeg;base64,${item.signature}`) : '';
-                                const scoreObj = comparisonScores.find(s => s.index === idx);
-                                const similarity = scoreObj?.similarity || 0;
-                                const percentage = scoreObj?.percentage || '0%';
-                                const isHighMatch = similarity >= 70;
-                                const isModerate = similarity >= 50 && similarity < 70;
-
-                                // Parse cheque amount and relation limit
-                                const rawChequeAmt = voucherData.amount || '0';
-                                const chequeAmountValue = parseFloat(rawChequeAmt.toString().replace(/[^0-9.]/g, '')) || 0;
-                                const itemLimitVal = item.limit !== undefined && item.limit !== null ? parseFloat(item.limit.toString().replace(/[^0-9.]/g, '')) : (item.amtlimit !== undefined ? parseFloat(item.amtlimit.toString()) : undefined);
-                                const isLimitExceeded = itemLimitVal !== undefined && itemLimitVal > 0 && chequeAmountValue > itemLimitVal;
-                                const signCategory = (item.sign_category || item.category || 'N/A').trim();
-                                const isEligible = !isLimitExceeded;
-
-                                return (
-                                  <div
-                                    key={idx}
-                                    className={`p-3.5 rounded-xl border transition-all ${
-                                      isHighMatch
-                                        ? 'bg-emerald-50/50 border-emerald-200 shadow-2xs'
-                                        : isModerate
-                                        ? 'bg-amber-50/50 border-amber-200'
-                                        : 'bg-slate-50 border-slate-200'
-                                    }`}
-                                  >
-                                    <div className="flex items-start justify-between gap-3 mb-2">
-                                      <div className="flex items-center space-x-3">
-                                        {photoUrl ? (
-                                          <img
-                                            src={photoUrl}
-                                            alt={`Signatory ${idx + 1}`}
-                                            className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm"
-                                          />
-                                        ) : (
-                                          <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-sm">
-                                            S{idx + 1}
-                                          </div>
-                                        )}
-                                        <div>
-                                          <div className="flex items-center gap-2">
-                                            <h4 className="text-xs font-bold text-slate-900">
-                                              {item.relation_no ? `Relation #${item.relation_no}` : `Signatory ${idx + 1}`}
-                                            </h4>
-                                            
-                                            {/* Eligibility Status Pill */}
-                                            <TooltipProvider delayDuration={150}>
-                                              {isEligible ? (
-                                                <Tooltip>
-                                                  <TooltipTrigger asChild>
-                                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-help">
-                                                      <Check className="w-2.5 h-2.5 text-emerald-700" /> Eligible
-                                                    </span>
-                                                  </TooltipTrigger>
-                                                  <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
-                                                    Active authorized signatory for this cheque
-                                                  </TooltipContent>
-                                                </Tooltip>
-                                              ) : (
-                                                <Tooltip>
-                                                  <TooltipTrigger asChild>
-                                                    <span className="text-[9px] font-extrabold uppercase tracking-wider text-red-700 bg-red-100 border border-red-300 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-help">
-                                                      <AlertTriangle className="w-2.5 h-2.5 text-red-600 animate-pulse" /> Not Allowed
-                                                    </span>
-                                                  </TooltipTrigger>
-                                                  <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
-                                                    Cheque amount exceeds allowed limit for this signatory
-                                                  </TooltipContent>
-                                                </Tooltip>
-                                              )}
-                                            </TooltipProvider>
-                                          </div>
-
-                                          {/* Sign Category & Amount Limit Row with Hover Info Tooltips */}
-                                          <TooltipProvider delayDuration={150}>
-                                            <div className="flex flex-wrap items-center gap-3 mt-1 text-slate-700">
-                                              
-                                              {/* Sign Category */}
-                                              <div className="flex items-center gap-1">
-                                                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Cat:</span>
-                                                <span className="text-xs font-bold text-slate-900">{signCategory}</span>
-                                                <Tooltip>
-                                                  <TooltipTrigger asChild>
-                                                    <span className="inline-flex items-center cursor-help ml-0.5">
-                                                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                                    </span>
-                                                  </TooltipTrigger>
-                                                  <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
-                                                    Category '{signCategory}' is valid & authorized for this account mandate
-                                                  </TooltipContent>
-                                                </Tooltip>
-                                              </div>
-
-                                              {/* Amount Limit Check */}
-                                              <div className="flex items-center gap-1">
-                                                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">Limit:</span>
-                                                <span className={`text-xs font-bold ${isLimitExceeded ? 'text-red-600 font-black' : 'text-slate-900'}`}>
-                                                  {itemLimitVal !== undefined && itemLimitVal > 0 
-                                                    ? `GHS ${itemLimitVal.toLocaleString('en-US')}` 
-                                                    : 'No Limit'}
-                                                </span>
-                                                {isLimitExceeded ? (
-                                                  <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                      <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase text-red-600 bg-red-100/80 border border-red-300 px-1.5 py-0.5 rounded-full cursor-help ml-1">
-                                                        <AlertCircle className="w-3 h-3 text-red-600 animate-pulse shrink-0" />
-                                                        <span>Exceeded</span>
-                                                      </span>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
-                                                      Cheque amount ({chequeAmountValue ? `GHS ${chequeAmountValue.toLocaleString('en-US')}` : 'N/A'}) exceeds limit of GHS {itemLimitVal?.toLocaleString('en-US')}
-                                                    </TooltipContent>
-                                                  </Tooltip>
-                                                ) : (
-                                                  <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                      <span className="inline-flex items-center cursor-help ml-0.5">
-                                                        <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                                      </span>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent side="top" className="text-[10px] font-bold bg-slate-900 text-white">
-                                                      Cheque amount is within allowable signatory limit
-                                                    </TooltipContent>
-                                                  </Tooltip>
-                                                )}
-                                              </div>
-
-                                            </div>
-                                          </TooltipProvider>
-
-                                        </div>
-                                      </div>
-
-                                      {/* Match Percentage Badge */}
-                                      <div className="flex flex-col items-end">
-                                        {isRecalculatingScores ? (
-                                          <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-slate-200 text-slate-700 flex items-center gap-1.5 animate-pulse">
-                                            <RefreshCw className="h-3 w-3 animate-spin text-blue-600" /> Matching...
-                                          </span>
-                                        ) : (
-                                          <span
-                                            className={`px-2.5 py-1 text-xs font-bold rounded-full flex items-center gap-1 ${
-                                              isHighMatch
-                                                ? 'bg-emerald-600 text-white shadow-sm'
-                                                : isModerate
-                                                ? 'bg-amber-500 text-white'
-                                                : 'bg-slate-200 text-slate-700'
-                                            }`}
-                                          >
-                                            {isHighMatch && <CheckCircle2 className="h-3.5 w-3.5" />}
-                                            {percentage} Match
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    {/* Specimen Signature View */}
-                                    {sigUrl && (
-                                      <div className="bg-white rounded-md p-2 border border-slate-200 flex items-center justify-center h-24 mt-2">
-                                        <img
-                                          src={sigUrl}
-                                          alt={`Specimen Signature ${idx + 1}`}
-                                          className="max-h-20 max-w-full object-contain filter contrast-125"
-                                        />
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                    </div>
-                  )}
-                </div>
-
-                {/* Footer Decisions */}
-                <div className="bg-white border-t border-slate-200 px-6 py-4 flex items-center justify-between">
-                  <div className="text-xs text-slate-500 flex items-center gap-2">
-                    <span>Verification Audit:</span>
-                    {voucherData.signatureStatus ? (
-                      <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
-                        voucherData.signatureStatus === 'VALID' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
-                      }`}>
-                        {voucherData.signatureStatus}
-                      </span>
-                    ) : (
-                      <span className="italic text-slate-400">Pending Officer Decision</span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center space-x-3">
-                    <button
-                      onClick={() => setConfirmDecision('INVALID')}
-                      className="px-4 py-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg border border-red-200 transition-colors flex items-center gap-1.5"
-                    >
-                      <XCircle className="h-4 w-4" /> Reject / Mismatch
-                    </button>
-                    <button
-                      onClick={() => setConfirmDecision('VALID')}
-                      className="px-5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
-                    >
-                      <CheckCircle2 className="h-4 w-4" /> Corresponds & Approve
-                    </button>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-          )}
-
-          {/* Confirmation Dialog for Decision Submit / Cancel */}
-          {confirmDecision && (
-            <div className="fixed inset-0 z-[70] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-              <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-5 animate-in zoom-in-95 duration-200">
-                <div className="flex items-center space-x-3">
-                  {confirmDecision === 'VALID' ? (
-                    <div className="p-3 bg-emerald-100 rounded-xl text-emerald-600">
-                      <CheckCircle2 className="h-7 w-7" />
-                    </div>
-                  ) : (
-                    <div className="p-3 bg-red-100 rounded-xl text-red-600">
-                      <XCircle className="h-7 w-7" />
-                    </div>
-                  )}
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">
-                      {confirmDecision === 'VALID' ? 'Confirm Signature Approval' : 'Confirm Signature Rejection'}
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Account: <span className="font-mono text-slate-700 font-semibold">{voucherData.accountNumber || '19010000000599171'}</span>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 text-xs text-slate-600 space-y-1.5">
-                  <p>
-                    {confirmDecision === 'VALID' ? (
-                      <>Are you sure you want to approve this cheque? You are confirming that the scanned signature matches the registered account mandate specimen.</>
-                    ) : (
-                      <>Are you sure you want to reject this cheque? The signature will be flagged as a mismatch against the account mandate specimen.</>
-                    )}
-                  </p>
-                  {voucherData.amount && (
-                    <p className="font-semibold text-slate-800 pt-1">
-                      Cheque Amount: GHS {voucherData.amount}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-end space-x-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDecision(null)}
-                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-                  >
-                    Cancel / Go Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const status = confirmDecision;
-                      setVoucherData(prev => ({ ...prev, signatureStatus: status }));
-                      if (status === 'VALID') {
-                        toast({ title: "Signature Verified & Approved", description: "Cheque signature confirmed VALID." });
-                      } else {
-                        toast({ title: "Signature Flagged & Rejected", description: "Cheque signature flagged as MISMATCH / REJECTED.", variant: "destructive" });
-                      }
-                      setConfirmDecision(null);
-                      setIsCompareModalOpen(false);
-                    }}
-                    className={`px-5 py-2 text-xs font-bold text-white rounded-lg shadow-md transition-all flex items-center gap-1.5 ${
-                      confirmDecision === 'VALID'
-                        ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800'
-                        : 'bg-red-600 hover:bg-red-700 active:bg-red-800'
-                    }`}
-                  >
-                    {confirmDecision === 'VALID' ? (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" /> Yes, Confirm Approval
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="h-4 w-4" /> Yes, Confirm Rejection
-                      </>
-                    )}
                   </button>
                 </div>
               </div>

@@ -2,7 +2,7 @@
 
 This guide is designed for both technical and non-technical users to set up, configure, and run the Cheque Scanner Application from scratch.
 
-It covers physical hardware connections, software prerequisites, system configurations, executing the application servers, capturing signatures via Topaz pad, and performing end-to-end cheque scanning.
+It covers physical hardware connections, software prerequisites, system configurations, executing the application servers, automatic signature extraction via Python Vision Engine, and performing end-to-end cheque scanning.
 
 ---
 
@@ -13,9 +13,7 @@ It covers physical hardware connections, software prerequisites, system configur
 
 1. **MagTek Excella STX Scanner** (specifically model Excella STX USB/Ethernet) + **Power Adapter** and **USB 2.0 A-to-B Cable**.
 
-2. **Topaz Signature Pad** (Topaz SigLite / SignatureGem models e.g., `T-S460`, `T-L462`, or `T-S751` USB pad) + **USB Cable**.
-
-3. **Sample Cheque** loaded into the scanner manual feed throat.
+2. **Sample Cheque** loaded into the scanner manual feed throat.
 
 
 ### PC & Network Requirements
@@ -196,18 +194,27 @@ The backend loads `backend\ScannerApi\mtxmlmcr.dll` before falling back to syste
 ## 3. Configuration
 
 
-### Database Connection String
+### Database Configuration (PostgreSQL Engine)
 
-The backend API is configured to connect to the Oracle Database. To modify database connection parameters:
+The backend API persists all scanned vouchers, MICR codelines, images, and card telemetry to a **PostgreSQL Database**:
 
+* **Host:** `10.203.14.50`
+* **Port:** `5432`
+* **Database Name:** `xvscan`
+* **Username:** `postgres`
+* **Password:** `usg12345`
+* **Connection String:**
+  ```csharp
+  private readonly string pgConnectionString = "Host=10.203.14.50;Port=5432;Database=xvscan;Username=postgres;Password=usg12345";
+  ```
+
+> [!NOTE]
+> **Oracle Legacy Code:** The previous Oracle database connection logic and credentials in `ScannerController.cs` have been preserved as comments for architectural reference and are not actively executed.
+
+To modify PostgreSQL connection parameters:
 1. Open `backend/ScannerApi/Controllers/ScannerController.cs`.
-
-2. Locate line 29 / 228:
-   ```csharp
-   private readonly string connectionString = "Data Source=10.203.14.169:9534/USGL;User Id=XVSCAN;Password=pass1234;";
-   ```
-
-3. Update IP address, port, service name, username, or password, and save.
+2. Locate `pgConnectionString` around line 24.
+3. Update parameters and save.
 
 ---
 
@@ -242,11 +249,20 @@ To run the complete system, start the three application processes in separate te
    dotnet build ScannerApi.csproj --configuration Release --runtime win-x86 --self-contained false
    ```
 
-5. Run the backend Web API:
-   ```cmd
-   dotnet run
+5. Run the backend Web API (using 32-bit Release runtime):
+   ```powershell
+   dotnet run --configuration Release --runtime win-x86
    ```
    *The Web API is successfully running once it displays `Now listening on: http://localhost:5042`.*
+
+
+   ### Quick command for build and run:
+   ```
+   cd backend\ScannerApi
+   dotnet build ScannerApi.csproj --configuration Release --runtime win-x86 --self-contained false
+   dotnet run --configuration Release --runtime win-x86
+   ```
+
 
 
 ### Step 2: Start the Pure Python Vision Engine (OCR & Signature Crop)

@@ -355,7 +355,7 @@ def crop_signature():
     try:
         data = request.json or {}
         b64_image = data.get('image', '')
-        default_roi = {'x': 0.45, 'y': 0.52, 'w': 0.55, 'h': 0.30}
+        default_roi = {'x': 0.58, 'y': 0.52, 'w': 0.40, 'h': 0.30}
         roi = data.get('roi') or default_roi
         
         img = base64_to_cv2(b64_image)
@@ -363,9 +363,9 @@ def crop_signature():
             return jsonify({'success': False, 'croppedImage': b64_image})
             
         h, w = img.shape[:2]
-        rx = int(float(roi.get('x', 0.45)) * w)
+        rx = int(float(roi.get('x', 0.58)) * w)
         ry = int(float(roi.get('y', 0.52)) * h)
-        rw = int(float(roi.get('w', 0.55)) * w)
+        rw = int(float(roi.get('w', 0.40)) * w)
         rh = int(float(roi.get('h', 0.30)) * h)
         
         rx = max(0, min(w - 1, rx))

@@ -29,6 +29,7 @@ except ImportError:
 
 EASYOCR_READER = None
 try:
+    # pyrefly: ignore [missing-import]
     import easyocr
     EASYOCR_READER = easyocr.Reader(['en'], gpu=False)
 except Exception as e:
@@ -573,7 +574,7 @@ def detect_signature_spaces_and_signed_count(cheque_img, required_signatures=1):
     2. Measures pen ink stroke density and contours to count actual signed signatures.
     """
     h, w = cheque_img.shape[:2]
-    rx1, rx2 = int(w * 0.50), int(w * 0.98)
+    rx1, rx2 = int(w * 0.58), int(w * 0.98)
     ry1, ry2 = int(h * 0.52), int(h * 0.94)
     
     sig_roi = cheque_img[ry1:ry2, rx1:rx2]

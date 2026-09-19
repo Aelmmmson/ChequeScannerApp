@@ -141,3 +141,10 @@ C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\obj\Release\net6.0\re
 C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\obj\Release\net6.0\ScannerApi.pdb
 C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\obj\Release\net6.0\ScannerApi.genruntimeconfig.cache
 C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\obj\Release\net6.0\ref\ScannerApi.dll
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\Npgsql.dll
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\publish\publish\publish\web.config
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\publish\publish\publish\appsettings.Development.json
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\publish\publish\publish\appsettings.json
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\publish\publish\publish\ScannerApi.deps.json
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\publish\publish\publish\ScannerApi.runtimeconfig.json
+C:\Users\USG\Downloads\ChequeScannerApp\backend\ScannerApi\bin\Release\net6.0\publish\publish\publish\ScannerApi.staticwebassets.endpoints.json

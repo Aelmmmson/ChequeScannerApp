@@ -9,6 +9,9 @@ using System.Threading;
 using System.Linq;
 using Microsoft.AspNetCore.Cors;
 using System.Text.RegularExpressions;
+using Npgsql;
+using System.Net.Http;
+using System.Threading.Tasks;
 
 namespace ScannerApi.Controllers
 {
@@ -19,7 +22,7 @@ namespace ScannerApi.Controllers
     {
         private const int DEFAULT_STRING_BUFFER_SIZE = 4096;
         private const int MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
-        private readonly string imageSavePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ScannedImages");
+        private const long MAX_LOG_FILE_BYTES = 10 * 1024 * 1024; // 10 MB log cap
         private string? g_strLogFileName;
         private string g_strAppPath = AppDomain.CurrentDomain.BaseDirectory;
         private int g_hLogFile = -1;
@@ -27,9 +30,14 @@ namespace ScannerApi.Controllers
         private static string m_strCurrentDeviceName = "";
         private string m_strOptions = new string('\0', DEFAULT_STRING_BUFFER_SIZE);
         private string m_strDocInfo = "";
-        private readonly string connectionString = "Data Source=10.203.14.169:9534/USGL;User Id=XVSCAN;Password=pass1234;";
+        // Oracle connection string (Commented - do not remove nor fallback)
+        // private readonly string connectionString = "Data Source=10.203.14.169:9534/USGL;User Id=XVSCAN;Password=pass1234;";
+
+        private readonly IConfiguration? _configuration;
+        private readonly string pgConnectionString;
+        private readonly string imagingApiBaseUrl;
         private bool disposed = false;
-        private readonly StreamWriter? logWriter;
+        private static StreamWriter? logWriter;
         private static readonly object logLock = new object();
         private static DocType m_nDocType = DocType.CHECK;
 
@@ -40,30 +48,14 @@ namespace ScannerApi.Controllers
             INVALID
         }
 
-        public ScannerController()
+        public ScannerController(IConfiguration? configuration = null)
         {
+            _configuration = configuration;
+            pgConnectionString = _configuration?.GetConnectionString("PostgreSQL") ?? "Host=10.203.14.50;Port=5432;Database=xvscan;Username=postgres;Password=usg12345;";
+            imagingApiBaseUrl = (_configuration?["ExternalApis:ImagingApiBaseUrl"] ?? "http://10.203.14.169").TrimEnd('/');
+
             SetupLogging();
-            string logPath = Path.Combine(g_strAppPath, "debug.log");
-            lock (logLock)
-            {
-                try
-                {
-                    if (!Directory.Exists(imageSavePath))
-                    {
-                        Directory.CreateDirectory(imageSavePath);
-                        LogMessage($"Constructor: Created image save directory at {imageSavePath}");
-                    }
-                    var fileStream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                    logWriter = new StreamWriter(fileStream) { AutoFlush = true };
-                    LogMessage("SetupLogging: Log file initialized at " + logPath);
-                    LogMessage($"Constructor: Initial DocType={m_nDocType}");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Failed to initialize log file or directories: {ex.Message}");
-                    LogMessage($"Constructor: Failed to initialize log file or directories: {ex.Message}");
-                }
-            }
+            LogMessage($"Constructor: Initialized ScannerController with DocType={m_nDocType}");
         }
 
         private void SetupLogging()
@@ -87,18 +79,42 @@ namespace ScannerApi.Controllers
         {
             lock (logLock)
             {
-                if (logWriter != null && !logWriter.BaseStream.CanWrite)
-                {
-                    Console.WriteLine($"LogMessage: StreamWriter unavailable, message: {message}");
-                    return;
-                }
                 try
                 {
-                    logWriter?.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
-                }
-                catch (ObjectDisposedException)
-                {
-                    Console.WriteLine($"LogMessage: StreamWriter disposed, message: {message}");
+                    string logPath = Path.Combine(g_strAppPath, "debug.log");
+                    string oldLogPath = Path.Combine(g_strAppPath, "debug.log.old");
+
+                    // Check for 10 MB limit and perform strict 1-file overwrite rotation
+                    if (System.IO.File.Exists(logPath))
+                    {
+                        System.IO.FileInfo fi = new System.IO.FileInfo(logPath);
+                        if (fi.Length >= MAX_LOG_FILE_BYTES)
+                        {
+                            try
+                            {
+                                if (logWriter != null)
+                                {
+                                    logWriter.Flush();
+                                    logWriter.Dispose();
+                                    logWriter = null;
+                                }
+                                System.IO.File.Copy(logPath, oldLogPath, overwrite: true);
+                                System.IO.File.Delete(logPath);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"LogMessage: Error rotating log file: {ex.Message}");
+                            }
+                        }
+                    }
+
+                    if (logWriter == null || !logWriter.BaseStream.CanWrite)
+                    {
+                        var fileStream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                        logWriter = new StreamWriter(fileStream) { AutoFlush = true };
+                    }
+
+                    logWriter.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
                 }
                 catch (Exception ex)
                 {
@@ -260,7 +276,7 @@ namespace ScannerApi.Controllers
                 for (int attempt = 1; attempt <= maxRetries; attempt++)
                 {
                     devices.Clear();
-                    for (byte nTotalDev = 1; nTotalDev <= maxDevices; nTotalDev++)
+                    for (byte nTotalDev = 0; nTotalDev <= maxDevices; nTotalDev++)
                     {
                         StringBuilder strDeviceName = new StringBuilder(256);
                         int nRetCode = MTMICRGetDevice(nTotalDev, strDeviceName);
@@ -601,6 +617,8 @@ namespace ScannerApi.Controllers
                     LogMessage("SaveToDatabase: No back image provided for CHECK");
                 }
 
+                /*
+                // ORACLE DB SAVE CODE (COMMENTED - DO NOT REMOVE NOR FALLBACK)
                 try
                 {
                     LogMessage("SaveToDatabase: Attempting database connection");
@@ -636,10 +654,188 @@ namespace ScannerApi.Controllers
                     LogMessage($"SaveToDatabase: OracleException: {ex.Message}, ErrorCode: {ex.ErrorCode}, StackTrace: {ex.StackTrace}");
                     return StatusCode(500, new { success = false, message = $"Database error: {ex.Message}" });
                 }
+                */
+
+                // POSTGRESQL DB SAVE CODE
+                // Credentials: $pg_tns = "pgsql:host=10.203.14.50;port=5432;dbname=xvscan"; $pg_user = "postgres"; $pg_pwd = "usg12345";
+                try
+                {
+                    LogMessage("SaveToDatabase: Attempting PostgreSQL database connection");
+                    using (var connection = new NpgsqlConnection(pgConnectionString))
+                    {
+                        connection.Open();
+                        LogMessage("SaveToDatabase: PostgreSQL database connection opened");
+
+                        EnsurePostgresColumns(connection);
+
+                        string effectiveDocType = m_nDocType == DocType.MSR ? "MSR" : "CHECK";
+                        if (!string.IsNullOrEmpty(voucherData.voucherType))
+                        {
+                            effectiveDocType = voucherData.voucherType;
+                        }
+
+                        string transId = (voucherData.voucherNo ?? "").Trim();
+                        if (string.IsNullOrEmpty(transId))
+                        {
+                            transId = "scan_" + DateTime.Now.ToString("yyyyMMddHHmmss");
+                        }
+
+                        // Check if row already exists in mbank_cheques
+                        bool rowExists = false;
+                        using (var checkCmd = new NpgsqlCommand("SELECT 1 FROM mbank_cheques WHERE UPPER(trans_id) = @transId OR trans_id = @rawTransId", connection))
+                        {
+                            checkCmd.Parameters.AddWithValue("transId", transId.ToUpper());
+                            checkCmd.Parameters.AddWithValue("rawTransId", transId);
+                            var scalar = checkCmd.ExecuteScalar();
+                            rowExists = scalar != null;
+                        }
+
+                        string query;
+                        if (rowExists)
+                        {
+                            query = @"
+                                UPDATE mbank_cheques SET
+                                    image1 = COALESCE(@image1, image1),
+                                    image2 = COALESCE(@image2, image2),
+                                    narration = @narration,
+                                    voucher_type = @voucherType,
+                                    micr = @micr,
+                                    front_image_path = @frontImagePath,
+                                    back_image_path = @backImagePath,
+                                    track_data1 = @trackData1,
+                                    track_data2 = @trackData2,
+                                    track_data3 = @trackData3,
+                                    mp_data = @mpData,
+                                    card_type = @cardType,
+                                    magne_print_status = @magnePrintStatus,
+                                    track1_status = @track1Status,
+                                    track2_status = @track2Status,
+                                    track3_status = @track3Status,
+                                    get_score = @getScore,
+                                    device_serial_number = @deviceSerialNumber,
+                                    dukpt_serial_number = @dukptSerialNumber,
+                                    encrypted_session_id = @encryptedSessionId,
+                                    encrypted_track1 = @encryptedTrack1,
+                                    encrypted_track2 = @encryptedTrack2,
+                                    encrypted_track3 = @encryptedTrack3,
+                                    cheque_num = @checkNumber,
+                                    acct_no = @accountNumber,
+                                    routing_number = @routingNumber,
+                                    bank_code = @bankCode,
+                                    country_code = @countryCode,
+                                    state_code = @stateCode,
+                                    branch_code = @branchCode,
+                                    transaction_code = @transactionCode,
+                                    check_date = @checkDate,
+                                    amount = @amount,
+                                    amount_words = @amountWords,
+                                    account_holder = @accountHolder,
+                                    signature = @signature
+                                WHERE UPPER(trans_id) = @transIdUpper OR trans_id = @rawTransId;
+                            ";
+                        }
+                        else
+                        {
+                            query = @"
+                                INSERT INTO mbank_cheques (
+                                    trans_id, image1, image2, narration, voucher_type, micr,
+                                    front_image_path, back_image_path, track_data1, track_data2, track_data3,
+                                    mp_data, card_type, magne_print_status, track1_status, track2_status, track3_status,
+                                    get_score, device_serial_number, dukpt_serial_number, encrypted_session_id,
+                                    encrypted_track1, encrypted_track2, encrypted_track3,
+                                    cheque_num, acct_no, routing_number, bank_code,
+                                    country_code, state_code, branch_code, transaction_code,
+                                    check_date, amount, amount_words, account_holder, signature
+                                )
+                                VALUES (
+                                    @transId, @image1, @image2, @narration, @voucherType, @micr,
+                                    @frontImagePath, @backImagePath, @trackData1, @trackData2, @trackData3,
+                                    @mpData, @cardType, @magnePrintStatus, @track1Status, @track2Status, @track3Status,
+                                    @getScore, @deviceSerialNumber, @dukptSerialNumber, @encryptedSessionId,
+                                    @encryptedTrack1, @encryptedTrack2, @encryptedTrack3,
+                                    @checkNumber, @accountNumber, @routingNumber, @bankCode,
+                                    @countryCode, @stateCode, @branchCode, @transactionCode,
+                                    @checkDate, @amount, @amountWords, @accountHolder, @signature
+                                );
+                            ";
+                        }
+
+                        using (var command = new NpgsqlCommand(query, connection))
+                        {
+                            command.Parameters.AddWithValue("transId", transId);
+                            command.Parameters.AddWithValue("transIdUpper", transId.ToUpper());
+                            command.Parameters.AddWithValue("rawTransId", transId);
+                            command.Parameters.AddWithValue("image1", (m_nDocType == DocType.CHECK || effectiveDocType == "CHECK") && frontImageBytes != null ? frontImageBytes : DBNull.Value);
+                            command.Parameters.AddWithValue("image2", (m_nDocType == DocType.CHECK || effectiveDocType == "CHECK") && backImageBytes != null ? backImageBytes : DBNull.Value);
+                            command.Parameters.AddWithValue("narration", string.IsNullOrEmpty(voucherData.narration) ? DBNull.Value : voucherData.narration);
+                            command.Parameters.AddWithValue("voucherType", string.IsNullOrEmpty(effectiveDocType) ? DBNull.Value : effectiveDocType);
+                            command.Parameters.AddWithValue("micr", string.IsNullOrEmpty(voucherData.micr) ? DBNull.Value : voucherData.micr);
+                            command.Parameters.AddWithValue("frontImagePath", string.IsNullOrEmpty(voucherData.frontImagePath) ? DBNull.Value : voucherData.frontImagePath);
+                            command.Parameters.AddWithValue("backImagePath", string.IsNullOrEmpty(voucherData.backImagePath) ? DBNull.Value : voucherData.backImagePath);
+                            command.Parameters.AddWithValue("trackData1", string.IsNullOrEmpty(voucherData.trackData1) ? DBNull.Value : voucherData.trackData1);
+                            command.Parameters.AddWithValue("trackData2", string.IsNullOrEmpty(voucherData.trackData2) ? DBNull.Value : voucherData.trackData2);
+                            command.Parameters.AddWithValue("trackData3", string.IsNullOrEmpty(voucherData.trackData3) ? DBNull.Value : voucherData.trackData3);
+                            command.Parameters.AddWithValue("mpData", string.IsNullOrEmpty(voucherData.mpData) ? DBNull.Value : voucherData.mpData);
+                            command.Parameters.AddWithValue("cardType", string.IsNullOrEmpty(voucherData.cardType) ? DBNull.Value : voucherData.cardType);
+                            command.Parameters.AddWithValue("magnePrintStatus", string.IsNullOrEmpty(voucherData.magnePrintStatus) ? DBNull.Value : voucherData.magnePrintStatus);
+                            command.Parameters.AddWithValue("track1Status", string.IsNullOrEmpty(voucherData.track1Status) ? DBNull.Value : voucherData.track1Status);
+                            command.Parameters.AddWithValue("track2Status", string.IsNullOrEmpty(voucherData.track2Status) ? DBNull.Value : voucherData.track2Status);
+                            command.Parameters.AddWithValue("track3Status", string.IsNullOrEmpty(voucherData.track3Status) ? DBNull.Value : voucherData.track3Status);
+                            command.Parameters.AddWithValue("getScore", string.IsNullOrEmpty(voucherData.getScore) ? DBNull.Value : voucherData.getScore);
+                            command.Parameters.AddWithValue("deviceSerialNumber", string.IsNullOrEmpty(voucherData.deviceSerialNumber) ? DBNull.Value : voucherData.deviceSerialNumber);
+                            command.Parameters.AddWithValue("dukptSerialNumber", string.IsNullOrEmpty(voucherData.dukptSerialNumber) ? DBNull.Value : voucherData.dukptSerialNumber);
+                            command.Parameters.AddWithValue("encryptedSessionId", string.IsNullOrEmpty(voucherData.encryptedSessionId) ? DBNull.Value : voucherData.encryptedSessionId);
+                            command.Parameters.AddWithValue("encryptedTrack1", string.IsNullOrEmpty(voucherData.encryptedTrack1) ? DBNull.Value : voucherData.encryptedTrack1);
+                            command.Parameters.AddWithValue("encryptedTrack2", string.IsNullOrEmpty(voucherData.encryptedTrack2) ? DBNull.Value : voucherData.encryptedTrack2);
+                            command.Parameters.AddWithValue("encryptedTrack3", string.IsNullOrEmpty(voucherData.encryptedTrack3) ? DBNull.Value : voucherData.encryptedTrack3);
+                            command.Parameters.AddWithValue("checkNumber", string.IsNullOrEmpty(voucherData.checkNumber) ? DBNull.Value : voucherData.checkNumber);
+                            command.Parameters.AddWithValue("accountNumber", string.IsNullOrEmpty(voucherData.accountNumber) ? DBNull.Value : voucherData.accountNumber);
+                            command.Parameters.AddWithValue("routingNumber", string.IsNullOrEmpty(voucherData.routingNumber) ? DBNull.Value : voucherData.routingNumber);
+                            command.Parameters.AddWithValue("bankCode", string.IsNullOrEmpty(voucherData.bankCode) ? DBNull.Value : voucherData.bankCode);
+                            command.Parameters.AddWithValue("countryCode", string.IsNullOrEmpty(voucherData.countryCode) ? DBNull.Value : voucherData.countryCode);
+                            command.Parameters.AddWithValue("stateCode", string.IsNullOrEmpty(voucherData.stateCode) ? DBNull.Value : voucherData.stateCode);
+                            command.Parameters.AddWithValue("branchCode", string.IsNullOrEmpty(voucherData.branchCode) ? DBNull.Value : voucherData.branchCode);
+                            command.Parameters.AddWithValue("transactionCode", string.IsNullOrEmpty(voucherData.transactionCode) ? DBNull.Value : voucherData.transactionCode);
+                            command.Parameters.AddWithValue("checkDate", string.IsNullOrEmpty(voucherData.checkDate) ? DBNull.Value : voucherData.checkDate);
+                            command.Parameters.AddWithValue("amount", string.IsNullOrEmpty(voucherData.amount) ? DBNull.Value : voucherData.amount);
+                            command.Parameters.AddWithValue("amountWords", string.IsNullOrEmpty(voucherData.amountWords) ? DBNull.Value : voucherData.amountWords);
+                            command.Parameters.AddWithValue("accountHolder", string.IsNullOrEmpty(voucherData.accountHolder) ? DBNull.Value : voucherData.accountHolder);
+                            command.Parameters.AddWithValue("signature", string.IsNullOrEmpty(voucherData.signature) ? DBNull.Value : voucherData.signature);
+
+                            LogMessage("SaveToDatabase: Executing PostgreSQL query");
+                            int rowsAffected = command.ExecuteNonQuery();
+                            LogMessage($"SaveToDatabase: Inserted/Updated {rowsAffected} row(s) into PostgreSQL for voucher {transId}");
+                        }
+                    }
+
+                    LogMessage($"SaveToDatabase: Successfully saved voucher {voucherData.voucherNo ?? "null"} to PostgreSQL database");
+                    return Ok(new { success = true, message = $"Voucher {voucherData.voucherNo ?? "null"} saved to database" });
+                }
                 catch (Exception ex)
                 {
-                    LogMessage($"SaveToDatabase: Error: {ex.Message}, StackTrace: {ex.StackTrace}");
-                    return StatusCode(500, new { success = false, message = $"Error saving to database: {ex.Message}" });
+                    LogMessage($"SaveToDatabase: Error: {ex.Message}, attempting fallback insert");
+                    try
+                    {
+                        using (var conn = new NpgsqlConnection(pgConnectionString))
+                        {
+                            conn.Open();
+                            string fallbackQuery = "INSERT INTO mbank_cheques (trans_id, image1, image2, narration) VALUES (@transId, @image1, @image2, @narration)";
+                            using (var cmd = new NpgsqlCommand(fallbackQuery, conn))
+                            {
+                                cmd.Parameters.AddWithValue("transId", string.IsNullOrEmpty(voucherData.voucherNo) ? DBNull.Value : voucherData.voucherNo);
+                                cmd.Parameters.AddWithValue("image1", frontImageBytes != null ? frontImageBytes : DBNull.Value);
+                                cmd.Parameters.AddWithValue("image2", backImageBytes != null ? backImageBytes : DBNull.Value);
+                                cmd.Parameters.AddWithValue("narration", string.IsNullOrEmpty(voucherData.narration) ? DBNull.Value : voucherData.narration);
+                                cmd.ExecuteNonQuery();
+                                return Ok(new { success = true, message = $"Voucher {voucherData.voucherNo ?? "null"} saved to database" });
+                            }
+                        }
+                    }
+                    catch (Exception fbEx)
+                    {
+                        LogMessage($"SaveToDatabase: Fallback failed: {fbEx.Message}");
+                        return StatusCode(500, new { success = false, message = $"Database error: {ex.Message}" });
+                    }
                 }
             }
             catch (Exception ex)
@@ -649,8 +845,143 @@ namespace ScannerApi.Controllers
             }
         }
 
+        private void EnsurePostgresColumns(NpgsqlConnection connection)
+        {
+            try
+            {
+                using (var createTableCmd = new NpgsqlCommand(@"
+                    CREATE TABLE IF NOT EXISTS mbank_cheques (
+                        trans_id VARCHAR(100) PRIMARY KEY,
+                        image1 BYTEA,
+                        image2 BYTEA,
+                        narration TEXT
+                    );
+                ", connection))
+                {
+                    createTableCmd.ExecuteNonQuery();
+                }
+
+                // Drop duplicate columns if present
+                using (var dropCmd = new NpgsqlCommand("ALTER TABLE mbank_cheques DROP COLUMN IF EXISTS check_number, DROP COLUMN IF EXISTS account_number;", connection))
+                {
+                    dropCmd.ExecuteNonQuery();
+                }
+            }
+            catch { }
+
+            string[] columns = new string[]
+            {
+                "voucher_type VARCHAR(100)",
+                "micr TEXT",
+                "front_image_path TEXT",
+                "back_image_path TEXT",
+                "track_data1 TEXT",
+                "track_data2 TEXT",
+                "track_data3 TEXT",
+                "mp_data TEXT",
+                "card_type VARCHAR(100)",
+                "magne_print_status VARCHAR(100)",
+                "track1_status VARCHAR(100)",
+                "track2_status VARCHAR(100)",
+                "track3_status VARCHAR(100)",
+                "get_score VARCHAR(100)",
+                "device_serial_number VARCHAR(150)",
+                "dukpt_serial_number VARCHAR(150)",
+                "encrypted_session_id VARCHAR(250)",
+                "encrypted_track1 TEXT",
+                "encrypted_track2 TEXT",
+                "encrypted_track3 TEXT",
+                "cheque_num VARCHAR(100)",
+                "acct_no VARCHAR(100)",
+                "routing_number VARCHAR(100)",
+                "bank_code VARCHAR(100)",
+                "country_code VARCHAR(50)",
+                "state_code VARCHAR(50)",
+                "branch_code VARCHAR(50)",
+                "transaction_code VARCHAR(50)",
+                "check_date VARCHAR(100)",
+                "amount VARCHAR(100)",
+                "amount_words TEXT",
+                "account_holder VARCHAR(250)",
+                "signature TEXT"
+            };
+
+            foreach (var col in columns)
+            {
+                try
+                {
+                    using (var colCmd = new NpgsqlCommand($"ALTER TABLE mbank_cheques ADD COLUMN IF NOT EXISTS {col}", connection))
+                    {
+                        colCmd.ExecuteNonQuery();
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static void AutoParseMicrIfEmpty(
+            string micr, 
+            ref string checkNo, 
+            ref string routingNo, 
+            ref string accountNo, 
+            ref string bankCode,
+            ref string countryCode,
+            ref string stateCode,
+            ref string branchCode,
+            ref string transactionCode)
+        {
+            if (string.IsNullOrEmpty(micr)) return;
+            try
+            {
+                // Remove non-alphanumeric/spaces delimiter symbols
+                string clean = System.Text.RegularExpressions.Regex.Replace(micr, @"[^0-9\s]", " ").Trim();
+                var parts = clean.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3)
+                {
+                    if (string.IsNullOrEmpty(checkNo)) checkNo = parts[0];
+                    string block2 = parts[1];
+                    string block3 = parts[2];
+
+                    if (string.IsNullOrEmpty(routingNo)) routingNo = block2;
+
+                    // Sierra Leone 10-digit sort code: Country(2) + BankCode(3) + State(2) + Branch(3)
+                    if (block2.Length >= 10)
+                    {
+                        if (string.IsNullOrEmpty(countryCode)) countryCode = block2.Substring(0, 2);
+                        string bCode = block2.Substring(2, 3);
+                        if (string.IsNullOrEmpty(bankCode)) bankCode = bCode;
+                        if (string.IsNullOrEmpty(stateCode)) stateCode = block2.Substring(5, 2);
+                        string branch = block2.Substring(7, 3);
+                        if (string.IsNullOrEmpty(branchCode)) branchCode = branch;
+
+                        string prefix = $"{bCode}{branch}";
+                        if (string.IsNullOrEmpty(accountNo) || accountNo == block3 || (!accountNo.StartsWith(prefix) && accountNo.EndsWith(block3)))
+                        {
+                            accountNo = $"{prefix}{block3}";
+                        }
+
+                        if (parts.Length >= 4 && string.IsNullOrEmpty(transactionCode))
+                        {
+                            transactionCode = parts[3];
+                        }
+                    }
+                    else
+                    {
+                        if (string.IsNullOrEmpty(accountNo)) accountNo = block3;
+                        if (parts.Length >= 4 && string.IsNullOrEmpty(transactionCode)) transactionCode = parts[3];
+                    }
+                }
+                else if (parts.Length == 2)
+                {
+                    if (string.IsNullOrEmpty(checkNo)) checkNo = parts[0];
+                    if (string.IsNullOrEmpty(accountNo)) accountNo = parts[1];
+                }
+            }
+            catch { }
+        }
+
         [HttpGet("view/{transId}")]
-        public IActionResult ViewVoucherData(string transId)
+        public async Task<IActionResult> ViewVoucherData(string transId)
         {
             try
             {
@@ -661,83 +992,254 @@ namespace ScannerApi.Controllers
                     return BadRequest(new { success = false, message = "Voucher number is required" });
                 }
 
-                using (var connection = new OracleConnection(connectionString))
+                string frontImage = "";
+                string backImage = "";
+                string narration = "";
+                string voucherNo = transId.Trim();
+                string voucherType = "";
+                string micr = "";
+                string frontImagePath = "";
+                string backImagePath = "";
+                string trackData1 = "";
+                string trackData2 = "";
+                string trackData3 = "";
+                string mpData = "";
+                string cardType = "";
+                string magnePrintStatus = "";
+                string track1Status = "";
+                string track2Status = "";
+                string track3Status = "";
+                string getScore = "";
+                string deviceSerialNumber = "";
+                string dukptSerialNumber = "";
+                string encryptedSessionId = "";
+                string encryptedTrack1 = "";
+                string encryptedTrack2 = "";
+                string encryptedTrack3 = "";
+                string checkNumber = "";
+                string accountNumber = "";
+                string routingNumber = "";
+                string bankCode = "";
+                string countryCode = "";
+                string stateCode = "";
+                string branchCode = "";
+                string transactionCode = "";
+                string checkDate = "";
+                string amount = "";
+                string amountWords = "";
+                string accountHolder = "";
+                string signature = "";
+
+                // 1. Fetch from PostgreSQL FIRST to get all rich saved columns
+                try
                 {
-                    connection.Open();
-                    LogMessage("ViewVoucherData: Database connection opened");
-                    string query = "SELECT TRANS_ID, NARRATION, IMAGE1, IMAGE2 FROM mbank_cheques WHERE UPPER(TRANS_ID) = :transId";
-                    using (var command = new OracleCommand(query, connection))
+                    using (var connection = new NpgsqlConnection(pgConnectionString))
                     {
-                        command.Parameters.Add("transId", OracleDbType.Varchar2).Value = transId.ToUpper().Trim();
-
-                        using (var reader = command.ExecuteReader())
+                        connection.Open();
+                        string query = "SELECT * FROM mbank_cheques WHERE UPPER(trans_id) = @transId OR trans_id = @rawTransId";
+                        using (var command = new NpgsqlCommand(query, connection))
                         {
-                            if (reader.Read())
+                            command.Parameters.AddWithValue("transId", transId.ToUpper().Trim());
+                            command.Parameters.AddWithValue("rawTransId", transId.Trim());
+                            using (var reader = command.ExecuteReader())
                             {
-                                string? voucherNo = reader["TRANS_ID"] as string;
-                                string? narration = reader["NARRATION"] as string;
-                                byte[]? frontImageBytes = reader["IMAGE1"] as byte[];
-                                byte[]? backImageBytes = reader["IMAGE2"] as byte[];
-
-                                var voucherData = new VoucherData
+                                if (reader.Read())
                                 {
-                                    voucherNo = voucherNo ?? "",
-                                    narration = narration ?? "",
-                                    voucherType = "",
-                                    micr = "",
-                                    frontImage = frontImageBytes != null ? Convert.ToBase64String(frontImageBytes) : "",
-                                    backImage = backImageBytes != null ? Convert.ToBase64String(backImageBytes) : "",
-                                    frontImagePath = "",
-                                    backImagePath = "",
-                                    trackData1 = "",
-                                    trackData2 = "",
-                                    trackData3 = "",
-                                    mpData = "",
-                                    cardType = "",
-                                    magnePrintStatus = "",
-                                    track1Status = "",
-                                    track2Status = "",
-                                    track3Status = "",
-                                    getScore = "",
-                                    deviceSerialNumber = "",
-                                    dukptSerialNumber = "",
-                                    encryptedSessionId = "",
-                                    encryptedTrack1 = "",
-                                    encryptedTrack2 = "",
-                                    encryptedTrack3 = "",
-                                    checkNumber = "",
-                                    accountNumber = "",
-                                    routingNumber = "",
-                                    bankCode = "",
-                                    checkDate = "",
-                                    amount = "",
-                                    amountWords = "",
-                                    accountHolder = "",
-                                    signature = ""
-                                };
+                                    Func<string, string> getCol = (colName) =>
+                                    {
+                                        try
+                                        {
+                                            int ordinal = reader.GetOrdinal(colName);
+                                            return reader.IsDBNull(ordinal) ? "" : reader[ordinal]?.ToString() ?? "";
+                                        }
+                                        catch { return ""; }
+                                    };
 
-                                LogMessage($"ViewVoucherData: Found voucher {transId}, Narration={narration ?? "null"}, FrontImageLen={frontImageBytes?.Length ?? 0}, BackImageLen={backImageBytes?.Length ?? 0}");
-                                return Ok(new { success = true, data = voucherData });
-                            }
-                            else
-                            {
-                                LogMessage($"ViewVoucherData: No data found for voucher {transId}");
-                                return Ok(new { success = false, message = $"No data found for voucher {transId}" });
+                                    narration = getCol("narration");
+                                    voucherType = getCol("voucher_type");
+                                    micr = getCol("micr");
+                                    frontImagePath = getCol("front_image_path");
+                                    backImagePath = getCol("back_image_path");
+                                    trackData1 = getCol("track_data1");
+                                    trackData2 = getCol("track_data2");
+                                    trackData3 = getCol("track_data3");
+                                    mpData = getCol("mp_data");
+                                    cardType = getCol("card_type");
+                                    magnePrintStatus = getCol("magne_print_status");
+                                    track1Status = getCol("track1_status");
+                                    track2Status = getCol("track2_status");
+                                    track3Status = getCol("track3_status");
+                                    getScore = getCol("get_score");
+                                    deviceSerialNumber = getCol("device_serial_number");
+                                    dukptSerialNumber = getCol("dukpt_serial_number");
+                                    encryptedSessionId = getCol("encrypted_session_id");
+                                    encryptedTrack1 = getCol("encrypted_track1");
+                                    encryptedTrack2 = getCol("encrypted_track2");
+                                    encryptedTrack3 = getCol("encrypted_track3");
+                                    checkNumber = getCol("cheque_num");
+                                    if (string.IsNullOrEmpty(checkNumber)) checkNumber = getCol("check_number");
+                                    accountNumber = getCol("acct_no");
+                                    if (string.IsNullOrEmpty(accountNumber)) accountNumber = getCol("account_number");
+                                    routingNumber = getCol("routing_number");
+                                    bankCode = getCol("bank_code");
+                                    countryCode = getCol("country_code");
+                                    stateCode = getCol("state_code");
+                                    branchCode = getCol("branch_code");
+                                    transactionCode = getCol("transaction_code");
+                                    checkDate = getCol("check_date");
+                                    amount = getCol("amount");
+                                    amountWords = getCol("amount_words");
+                                    accountHolder = getCol("account_holder");
+                                    signature = getCol("signature");
+
+                                    // If image bytea is stored in PostgreSQL, load it
+                                    try
+                                    {
+                                        int ord1 = reader.GetOrdinal("image1");
+                                        if (!reader.IsDBNull(ord1) && reader[ord1] is byte[] b1) frontImage = Convert.ToBase64String(b1);
+                                    }
+                                    catch { }
+
+                                    try
+                                    {
+                                        int ord2 = reader.GetOrdinal("image2");
+                                        if (!reader.IsDBNull(ord2) && reader[ord2] is byte[] b2) backImage = Convert.ToBase64String(b2);
+                                    }
+                                    catch { }
+                                }
                             }
                         }
                     }
                 }
-            }
-            catch (OracleException ex)
-            {
-                LogMessage($"ViewVoucherData: OracleException: {ex.Message}, ErrorCode: {ex.ErrorCode}, StackTrace: {ex.StackTrace}");
-                return StatusCode(500, new { success = false, message = $"Database error: {ex.Message}" });
+                catch (Exception dbEx)
+                {
+                    LogMessage($"ViewVoucherData: PostgreSQL read notice: {dbEx.Message}");
+                }
+
+                // 2. Fetch from remote external API if images or details are needed: {imagingApiBaseUrl}/vscanner_api/get_cheque_images-{transId}
+                string requestUrl = $"{imagingApiBaseUrl}/vscanner_api/get_cheque_images-{transId.Trim()}";
+                LogMessage($"ViewVoucherData: Fetching images from external API: {requestUrl}");
+
+                try
+                {
+                    using (var httpClient = new HttpClient())
+                    {
+                        httpClient.Timeout = TimeSpan.FromSeconds(15);
+                        var httpResponse = await httpClient.GetAsync(requestUrl);
+                        if (httpResponse.IsSuccessStatusCode)
+                        {
+                            string responseBody = await httpResponse.Content.ReadAsStringAsync();
+                            LogMessage($"ViewVoucherData: Received response body length={responseBody.Length}");
+
+                            using (var doc = System.Text.Json.JsonDocument.Parse(responseBody))
+                            {
+                                var root = doc.RootElement;
+
+                                if (root.TryGetProperty("images", out var imagesProp) && imagesProp.ValueKind == System.Text.Json.JsonValueKind.Array && imagesProp.GetArrayLength() > 0)
+                                {
+                                    var imgObj = imagesProp[0];
+                                    if (string.IsNullOrEmpty(frontImage)) frontImage = GetJsonString(imgObj, "front", "frontImage", "front_image", "image1", "IMAGE1");
+                                    if (string.IsNullOrEmpty(backImage)) backImage = GetJsonString(imgObj, "back", "backImage", "back_image", "image2", "IMAGE2");
+                                }
+                                else if (root.ValueKind == System.Text.Json.JsonValueKind.Array && root.GetArrayLength() > 0)
+                                {
+                                    var first = root[0];
+                                    if (string.IsNullOrEmpty(frontImage)) frontImage = GetJsonString(first, "front", "frontImage", "front_image", "image1", "IMAGE1");
+                                    if (string.IsNullOrEmpty(backImage)) backImage = GetJsonString(first, "back", "backImage", "back_image", "image2", "IMAGE2");
+                                    if (string.IsNullOrEmpty(narration)) narration = GetJsonString(first, "narration", "description", "NARRATION");
+                                    if (string.IsNullOrEmpty(micr)) micr = GetJsonString(first, "micr", "MICR");
+                                }
+                                else if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+                                {
+                                    if (string.IsNullOrEmpty(frontImage)) frontImage = GetJsonString(root, "front", "frontImage", "front_image", "image1", "IMAGE1");
+                                    if (string.IsNullOrEmpty(backImage)) backImage = GetJsonString(root, "back", "backImage", "back_image", "image2", "IMAGE2");
+                                    if (string.IsNullOrEmpty(narration)) narration = GetJsonString(root, "narration", "description", "NARRATION");
+                                    if (string.IsNullOrEmpty(micr)) micr = GetJsonString(root, "micr", "MICR");
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception apiEx)
+                {
+                    LogMessage($"ViewVoucherData: External API fetch error: {apiEx.Message}");
+                }
+
+                // If MICR is present, ensure components are extracted
+                string parsedCountry = "";
+                string parsedState = "";
+                string parsedBranch = "";
+                string parsedTransCode = "";
+                AutoParseMicrIfEmpty(micr, ref checkNumber, ref routingNumber, ref accountNumber, ref bankCode, ref parsedCountry, ref parsedState, ref parsedBranch, ref parsedTransCode);
+
+                var voucherData = new VoucherData
+                {
+                    voucherNo = string.IsNullOrEmpty(voucherNo) ? transId : voucherNo,
+                    voucherType = voucherType,
+                    micr = micr,
+                    frontImage = frontImage,
+                    backImage = backImage,
+                    narration = narration,
+                    frontImagePath = frontImagePath,
+                    backImagePath = backImagePath,
+                    trackData1 = trackData1,
+                    trackData2 = trackData2,
+                    trackData3 = trackData3,
+                    mpData = mpData,
+                    cardType = cardType,
+                    magnePrintStatus = magnePrintStatus,
+                    track1Status = track1Status,
+                    track2Status = track2Status,
+                    track3Status = track3Status,
+                    getScore = getScore,
+                    deviceSerialNumber = deviceSerialNumber,
+                    dukptSerialNumber = dukptSerialNumber,
+                    encryptedSessionId = encryptedSessionId,
+                    encryptedTrack1 = encryptedTrack1,
+                    encryptedTrack2 = encryptedTrack2,
+                    encryptedTrack3 = encryptedTrack3,
+                    checkNumber = checkNumber,
+                    accountNumber = accountNumber,
+                    routingNumber = routingNumber,
+                    bankCode = bankCode,
+                    countryCode = string.IsNullOrEmpty(countryCode) ? parsedCountry : countryCode,
+                    stateCode = string.IsNullOrEmpty(stateCode) ? parsedState : stateCode,
+                    branchCode = string.IsNullOrEmpty(branchCode) ? parsedBranch : branchCode,
+                    transactionCode = string.IsNullOrEmpty(transactionCode) ? parsedTransCode : transactionCode,
+                    checkDate = checkDate,
+                    amount = amount,
+                    amountWords = amountWords,
+                    accountHolder = accountHolder,
+                    signature = signature
+                };
+
+                LogMessage($"ViewVoucherData: Loaded voucher {transId}, FrontImageLen={frontImage.Length}, BackImageLen={backImage.Length}, MICR={micr}, CheckNo={checkNumber}, AccNo={accountNumber}");
+                return Ok(new { success = true, data = voucherData });
             }
             catch (Exception ex)
             {
                 LogMessage($"ViewVoucherData: Error: {ex.Message}, StackTrace: {ex.StackTrace}");
                 return StatusCode(500, new { success = false, message = $"Error fetching voucher data: {ex.Message}" });
             }
+        }
+
+        private static string GetJsonString(System.Text.Json.JsonElement element, params string[] propertyNames)
+        {
+            foreach (var prop in propertyNames)
+            {
+                if (element.TryGetProperty(prop, out var val))
+                {
+                    if (val.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        return val.GetString() ?? "";
+                    }
+                    else if (val.ValueKind != System.Text.Json.JsonValueKind.Null && val.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                    {
+                        return val.ToString() ?? "";
+                    }
+                }
+            }
+            return "";
         }
 
         private bool IsValidBase64(string base64String)
@@ -785,7 +1287,7 @@ namespace ScannerApi.Controllers
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
                 devices.Clear();
-                for (byte nTotalDev = 1; nTotalDev <= maxDevices; nTotalDev++)
+                for (byte nTotalDev = 0; nTotalDev <= maxDevices; nTotalDev++)
                 {
                     StringBuilder strDeviceName = new StringBuilder(256);
                     int nRetCode = MTMICRGetDevice(nTotalDev, strDeviceName);
@@ -1086,6 +1588,18 @@ namespace ScannerApi.Controllers
                     }
                 }
 
+                // Sierra Leone MICR format: if routingNo is a 10-digit sort code, prepend BankCode (pos 3-5) + BranchCode (pos 8-10)
+                if (!string.IsNullOrEmpty(routingNo) && routingNo.Length >= 10 && !string.IsNullOrEmpty(accountNo))
+                {
+                    string slBankCode = routingNo.Substring(2, 3);
+                    string slBranchCode = routingNo.Substring(7, 3);
+                    string slPrefix = $"{slBankCode}{slBranchCode}";
+                    if (!accountNo.StartsWith(slPrefix))
+                    {
+                        accountNo = $"{slPrefix}{accountNo}";
+                    }
+                }
+
                 // 3. Normalize Check Number to standard 6 digits
                 if (checkNo.Length < 6 && checkNo.StartsWith("000"))
                 {
@@ -1373,17 +1887,6 @@ namespace ScannerApi.Controllers
                             {
                                 frontImage = Convert.ToBase64String(frontImageBuf, 0, nImageLength);
                                 LogMessage($"ExtractVoucherData: FrontImage Base64 length={frontImage.Length}");
-                                try
-                                {
-                                    frontImagePath = Path.Combine(imageSavePath, $"front_{timestamp}.jpg");
-                                    LogMessage($"ExtractVoucherData: Attempting to save front image to {frontImagePath}");
-                                    System.IO.File.WriteAllBytes(frontImagePath, frontImageBuf.Take(nImageLength).ToArray());
-                                    LogMessage($"ExtractVoucherData: Saved front image to {frontImagePath}, Size={nImageLength} bytes");
-                                }
-                                catch (Exception ex)
-                                {
-                                    LogMessage($"ExtractVoucherData: Error saving front image to {frontImagePath}: {ex.Message}, StackTrace: {ex.StackTrace}");
-                                }
                                 break;
                             }
                             else
@@ -1395,21 +1898,6 @@ namespace ScannerApi.Controllers
                     if (attempt < maxRetries)
                     {
                         Thread.Sleep(1000);
-                    }
-                }
-
-                // Save raw front image if available
-                if (frontImageBuf != null)
-                {
-                    try
-                    {
-                        frontImagePath = Path.Combine(imageSavePath, $"raw_front_{timestamp}.jpg");
-                        System.IO.File.WriteAllBytes(frontImagePath, frontImageBuf);
-                        LogMessage($"ExtractVoucherData: Saved raw front image to {frontImagePath}");
-                    }
-                    catch (Exception ex)
-                    {
-                        LogMessage($"ExtractVoucherData: Error saving raw front image: {ex.Message}, StackTrace: {ex.StackTrace}");
                     }
                 }
 
@@ -1455,17 +1943,6 @@ namespace ScannerApi.Controllers
                             {
                                 backImage = Convert.ToBase64String(backImageBuf, 0, nImageLength);
                                 LogMessage($"ExtractVoucherData: BackImage Base64 length={backImage.Length}");
-                                try
-                                {
-                                    backImagePath = Path.Combine(imageSavePath, $"back_{timestamp}.jpg");
-                                    LogMessage($"ExtractVoucherData: Attempting to save back image to {backImagePath}");
-                                    System.IO.File.WriteAllBytes(backImagePath, backImageBuf.Take(nImageLength).ToArray());
-                                    LogMessage($"ExtractVoucherData: Saved back image to {backImagePath}, Size={nImageLength} bytes");
-                                }
-                                catch (Exception ex)
-                                {
-                                    LogMessage($"ExtractVoucherData: Error saving back image to {backImagePath}: {ex.Message}, StackTrace: {ex.StackTrace}");
-                                }
                                 break;
                             }
                             else
@@ -1549,6 +2026,10 @@ namespace ScannerApi.Controllers
             public string accountNumber { get; set; } = "";
             public string routingNumber { get; set; } = "";
             public string bankCode { get; set; } = "";
+            public string countryCode { get; set; } = "";
+            public string stateCode { get; set; } = "";
+            public string branchCode { get; set; } = "";
+            public string transactionCode { get; set; } = "";
             public string checkDate { get; set; } = "";
             public string amount { get; set; } = ""; // Figures
             public string amountWords { get; set; } = ""; // Words from left section

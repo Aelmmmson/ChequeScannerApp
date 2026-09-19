@@ -1,1 +1,11 @@
-{"Version":1,"Hash":"97hUFoUy5Q+D5nNWFqj6EVfEDarKkq3/MGsbDz0YapI=","Source":"ScannerApi","BasePath":"_content/ScannerApi","Mode":"Default","ManifestType":"Publish","ReferencedProjectsConfiguration":[],"DiscoveryPatterns":[],"Assets":[],"Endpoints":[]}
+{
+  "Version": 1,
+  "Hash": "QMfsir+/pvS2l9FTazGvIxbuoa3Q06qfhaxqm4T8pFg=",
+  "Source": "ScannerApi",
+  "BasePath": "_content/ScannerApi",
+  "Mode": "Default",
+  "ManifestType": "Publish",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

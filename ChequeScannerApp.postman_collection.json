@@ -1,0 +1,290 @@
+{
+	"info": {
+		"_postman_id": "7a3b8c9d-1e2f-4a5b-6c7d-8e9f0a1b2c3d",
+		"name": "Cheque Scanner App System API Collection",
+		"description": "Complete Postman API Collection for the Cheque Scanner Application system, including .NET Scanner API, Python OCR & Signature Crop/Compare services, Face Recognition API, and Core Banking Mandate API.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "SCANNER_API_URL",
+			"value": "http://localhost:5042",
+			"type": "string"
+		},
+		{
+			"key": "PYTHON_SERVICE_URL",
+			"value": "http://127.0.0.1:8130",
+			"type": "string"
+		},
+		{
+			"key": "OCR_FACE_URL",
+			"value": "http://localhost:7007",
+			"type": "string"
+		},
+		{
+			"key": "CORE_BANKING_URL",
+			"value": "http://10.203.14.169",
+			"type": "string"
+		},
+		{
+			"key": "DEFAULT_ACCOUNT",
+			"value": "19010000000599171",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Scanner Hardware (.NET Core API)",
+			"item": [
+				{
+					"name": "Get Device List",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/devices",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "devices"]
+						},
+						"description": "Fetches all USB and network MagTek scanner devices connected to the host system."
+					}
+				},
+				{
+					"name": "Get Device Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/status",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "status"]
+						},
+						"description": "Checks connection status and health of the active scanner device."
+					}
+				},
+				{
+					"name": "Connect Default Device",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/connect",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "connect"]
+						},
+						"description": "Connects to the first available MagTek Excella STX scanner."
+					}
+				},
+				{
+					"name": "Connect Specific Device (STX.STX001)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/connect/STX.STX001",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "connect", "STX.STX001"]
+						},
+						"description": "Connects explicitly to device STX.STX001."
+					}
+				},
+				{
+					"name": "Set Document Type (CHECK)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/set-doctype/CHECK",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "set-doctype", "CHECK"]
+						},
+						"description": "Sets the hardware scanner mode to scan cheque/voucher document."
+					}
+				},
+				{
+					"name": "Set Document Type (MSR Card)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/set-doctype/MSR",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "set-doctype", "MSR"]
+						},
+						"description": "Sets hardware mode to swipe/read Magnetic Stripe Cards (MSR)."
+					}
+				},
+				{
+					"name": "Execute Scan",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/scan",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "scan"]
+						},
+						"description": "Triggers the hardware scan and returns MICR, base64 front/back images, and track data."
+					}
+				},
+				{
+					"name": "Save Scanned Record to DB",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"voucherNo\": \"VCH-2026-001\",\n  \"voucherType\": \"CHECK\",\n  \"narration\": \"Over-the-counter cheque withdrawal\",\n  \"micr\": \"T000347T 123456789U 01\",\n  \"frontImage\": \"/9j/4AAQSkZJRg...\",\n  \"backImage\": \"/9j/4AAQSkZJRg...\",\n  \"checkNumber\": \"000347\",\n  \"routingNumber\": \"123456789\",\n  \"accountNumber\": \"19010000000599171\",\n  \"amount\": \"2500.00\"\n}"
+						},
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/save",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "save"]
+						},
+						"description": "Saves scanned cheque data and image BLOBs to Oracle database (mbank_cheques table)."
+					}
+				},
+				{
+					"name": "View Voucher by Transaction ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{SCANNER_API_URL}}/api/scanner/view/VCH-2026-001",
+							"host": ["{{SCANNER_API_URL}}"],
+							"path": ["api", "scanner", "view", "VCH-2026-001"]
+						},
+						"description": "Retrieves saved voucher record by transaction ID from Oracle database."
+					}
+				}
+			]
+		},
+		{
+			"name": "2. OCR & Signature Microservice (Python FastAPI 8130)",
+			"item": [
+				{
+					"name": "Crop Signature",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"image\": \"data:image/jpeg;base64,/9j/4AAQSkZJRg...\",\n  \"roi\": {\n    \"x\": 0.45,\n    \"y\": 0.52,\n    \"w\": 0.55,\n    \"h\": 0.30,\n    \"isCustom\": true\n  }\n}"
+						},
+						"url": {
+							"raw": "{{PYTHON_SERVICE_URL}}/crop-signature",
+							"host": ["{{PYTHON_SERVICE_URL}}"],
+							"path": ["crop-signature"]
+						},
+						"description": "Crops signature region from cheque front image using OpenCV CLAHE contrast enhancement."
+					}
+				},
+				{
+					"name": "Compare Signatures",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"signature1\": \"data:image/jpeg;base64,...\",\n  \"signature2\": \"data:image/jpeg;base64,...\"\n}"
+						},
+						"url": {
+							"raw": "{{PYTHON_SERVICE_URL}}/compare-signatures",
+							"host": ["{{PYTHON_SERVICE_URL}}"],
+							"path": ["compare-signatures"]
+						},
+						"description": "Compares scanned cheque signature against mandate specimen signature and returns similarity score."
+					}
+				},
+				{
+					"name": "Extract Cheque OCR Data",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"image\": \"data:image/jpeg;base64,...\",\n  \"micrData\": {\n    \"checkNumber\": \"000347\",\n    \"accountNumber\": \"19010000000599171\",\n    \"routingNumber\": \"123456789\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{PYTHON_SERVICE_URL}}/extract-cheque-data",
+							"host": ["{{PYTHON_SERVICE_URL}}"],
+							"path": ["extract-cheque-data"]
+						},
+						"description": "Extracts Bank Name, Amount, Date, and Payee using OpenCV deskewing & Tesseract OCR."
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Face Recognition Service (Port 7007)",
+			"item": [
+				{
+					"name": "Compare Faces",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "livePhoto",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "customerPhoto",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{OCR_FACE_URL}}/compare-faces",
+							"host": ["{{OCR_FACE_URL}}"],
+							"path": ["compare-faces"]
+						},
+						"description": "Compares live camera photo against customer mandate photo."
+					}
+				}
+			]
+		},
+		{
+			"name": "4. External Core Banking API",
+			"item": [
+				{
+					"name": "Get Account Mandates & Specimen Signatures",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{CORE_BANKING_URL}}/imaging/api/core_enquiry-{{DEFAULT_ACCOUNT}}",
+							"host": ["{{CORE_BANKING_URL}}"],
+							"path": ["imaging", "api", "core_enquiry-{{DEFAULT_ACCOUNT}}"]
+						},
+						"description": "Fetches authorized signatories, photos, signatures, and transaction limits for an account."
+					}
+				}
+			]
+		}
+	]
+}

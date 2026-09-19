@@ -1,7 +1,39 @@
 import axios, { AxiosError } from 'axios';
+import { appConfig } from '@/config/appConfig';
 
-const API_BASE_URL = 'http://localhost:5042/api/scanner';
-const OCR_API_URL = 'http://localhost:8130/upload-cheque';
+const API_BASE_URL = appConfig.API_BASE_URL || 'http://localhost:5042/api/scanner';
+const OCR_API_URL = `${appConfig.OCR_SERVICE_URL || 'http://127.0.0.1:8130'}/upload-cheque`;
+
+// Helper function for client-side signature cropping fallback
+const cropImageClientSide = (base64Image: string, roi: { x: number; y: number; w: number; h: number }): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(base64Image);
+
+        const cropX = Math.round(roi.x * img.width);
+        const cropY = Math.round(roi.y * img.height);
+        const cropW = Math.round(roi.w * img.width);
+        const cropH = Math.round(roi.h * img.height);
+
+        canvas.width = Math.max(1, cropW);
+        canvas.height = Math.max(1, cropH);
+
+        ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+
+        resolve(canvas.toDataURL('image/jpeg', 0.95));
+      } catch {
+        resolve(base64Image);
+      }
+    };
+    img.onerror = () => resolve(base64Image);
+    img.src = base64Image.startsWith('data:') ? base64Image : `data:image/jpeg;base64,${base64Image}`;
+  });
+};
 
 interface VoucherData {
   voucherNo: string;
@@ -32,6 +64,10 @@ interface VoucherData {
   routingNumber: string;
   accountNumber: string;
   bankCode: string;
+  countryCode?: string;
+  stateCode?: string;
+  branchCode?: string;
+  transactionCode?: string;
   checkDate: string;
   amount: string;
   amountWords: string;
@@ -208,7 +244,7 @@ export const api = {
 
   fetchAccountData: async (accountNumber: string): Promise<AccountDataResponse> => {
     try {
-      const response = await axios.get(`http://10.203.14.169/imaging/get_account_signature-${accountNumber}`, {
+      const response = await axios.get(`${appConfig.EXTERNAL_IMAGING_API_BASE_URL}/imaging/get_account_signature-${accountNumber}`, {
         headers: {
           'Cookie': 'PHPSESSID=j12mdcbmma7d3mmcgb5q9pjj5q'
         }
@@ -238,18 +274,22 @@ export const api = {
       'X-API-SECRET': '141116517P'
     };
 
-    // 1. Try local proxy first to avoid browser CORS preflight errors
-    try {
-      const response = await axios.get(`/imaging-proxy/api/core_enquiry-${rawAccount}`, { headers });
-      console.log(`[${new Date().toISOString()}] getAccountSignatures (proxy): Response:`, response.data);
-      return response.data;
-    } catch (proxyError: unknown) {
-      console.warn(`[${new Date().toISOString()}] getAccountSignatures proxy failed, trying direct URL:`, proxyError);
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+    // 1. Try local proxy first if on localhost to avoid browser CORS preflight errors
+    if (isLocalhost) {
+      try {
+        const response = await axios.get(`/imaging-proxy/api/core_enquiry-${rawAccount}`, { headers });
+        console.log(`[${new Date().toISOString()}] getAccountSignatures (proxy): Response:`, response.data);
+        return response.data;
+      } catch (proxyError: unknown) {
+        console.warn(`[${new Date().toISOString()}] getAccountSignatures proxy failed, trying direct URL:`, proxyError);
+      }
     }
 
-    // 2. Try direct remote URL as fallback
+    // 2. Direct remote URL
     try {
-      const response = await axios.get(`http://10.203.14.169/imaging/api/core_enquiry-${rawAccount}`, { headers });
+      const response = await axios.get(`${appConfig.EXTERNAL_IMAGING_API_BASE_URL}/imaging/api/core_enquiry-${rawAccount}`, { headers });
       console.log(`[${new Date().toISOString()}] getAccountSignatures (direct): Response:`, response.data);
       return response.data;
     } catch (directError: unknown) {
@@ -259,7 +299,7 @@ export const api = {
         return fallbackRes.data;
       } catch {
         try {
-          const fallbackDirect = await axios.get(`http://10.203.14.169/imaging/get_account_signature-${rawAccount}`);
+          const fallbackDirect = await axios.get(`${appConfig.EXTERNAL_IMAGING_API_BASE_URL}/imaging/get_account_signature-${rawAccount}`);
           return fallbackDirect.data;
         } catch {
           const errorMessage = directError instanceof AxiosError ? directError.message : String(directError);
@@ -271,16 +311,23 @@ export const api = {
   },
 
   cropSignature: async (base64Image: string, roi?: { x: number; y: number; w: number; h: number; isCustom?: boolean }): Promise<{ success: boolean; croppedImage: string; rawCroppedImage?: string; roi?: any }> => {
+    const targetRoi = roi || { x: 0.58, y: 0.52, w: 0.40, h: 0.30 };
+    const formattedInput = base64Image.startsWith('data:') ? base64Image : `data:image/jpeg;base64,${base64Image}`;
     try {
       const response = await axios.post('http://127.0.0.1:8130/crop-signature', {
-        image: base64Image,
-        roi: roi || { x: 0.45, y: 0.52, w: 0.55, h: 0.30 },
+        image: formattedInput,
+        roi: targetRoi,
         isCustom: roi?.isCustom || false
       });
-      return response.data;
+      if (response.data && response.data.success && response.data.croppedImage) {
+        return response.data;
+      }
+      const clientCropped = await cropImageClientSide(formattedInput, targetRoi);
+      return { success: true, croppedImage: clientCropped, roi: targetRoi };
     } catch (error: unknown) {
-      console.error(`[${new Date().toISOString()}] cropSignature error:`, error);
-      return { success: false, croppedImage: base64Image };
+      console.warn(`[${new Date().toISOString()}] cropSignature remote error, executing client-side fallback:`, error);
+      const clientCropped = await cropImageClientSide(formattedInput, targetRoi);
+      return { success: true, croppedImage: clientCropped, roi: targetRoi };
     }
   },
 

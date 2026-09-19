@@ -17,27 +17,25 @@ interface SignatureCropOverlayProps {
   isLoading?: boolean;
 }
 
+const DEFAULT_ROI: ROI = { x: 0.58, y: 0.52, w: 0.40, h: 0.30 };
+
 export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
   imageSrc,
-  initialRoi = { x: 0.45, y: 0.52, w: 0.55, h: 0.30 },
+  initialRoi,
   onApplyCrop,
   onClose,
   isLoading = false
 }) => {
-  const [roi, setRoi] = useState<ROI>(initialRoi);
+  const [roi, setRoi] = useState<ROI>(() => initialRoi || DEFAULT_ROI);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isDraggingBox, setIsDraggingBox] = useState(false);
   const [activeHandle, setActiveHandle] = useState<string | null>(null);
   const [startPos, setStartPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [initialBoxPos, setInitialBoxPos] = useState<ROI>(initialRoi);
+  const [initialBoxPos, setInitialBoxPos] = useState<ROI>(() => initialRoi || DEFAULT_ROI);
   const [isZoomModalOpen, setIsZoomModalOpen] = useState(false);
 
   const imgRef = useRef<HTMLImageElement>(null);
   const zoomImgRef = useRef<HTMLImageElement>(null);
-
-  useEffect(() => {
-    setRoi(initialRoi);
-  }, [initialRoi]);
 
   // Calculate mouse position strictly relative to the displayed image element pixels
   const getRelativeImageCoords = (e: React.MouseEvent<HTMLDivElement>, targetImgRef: React.RefObject<HTMLImageElement>) => {
@@ -63,14 +61,22 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
       return;
     }
 
-    if (target.getAttribute('data-box') === 'true') {
+    // Check if user clicked strictly inside the existing crop box area
+    const isInsideBox = (
+      coords.x >= roi.x &&
+      coords.x <= roi.x + roi.w &&
+      coords.y >= roi.y &&
+      coords.y <= roi.y + roi.h
+    );
+
+    if (isInsideBox && target.getAttribute('data-box') === 'true') {
       setIsDraggingBox(true);
       setStartPos({ x: e.clientX, y: e.clientY });
       setInitialBoxPos({ ...roi });
       return;
     }
 
-    // Draw new bounding box
+    // Draw new bounding box if clicked outside or anywhere on image canvas
     setIsDrawing(true);
     setStartPos({ x: e.clientX, y: e.clientY });
     setRoi({
@@ -149,29 +155,28 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
   };
 
   const handleResetDefault = () => {
-    const defaultRoi = { x: 0.45, y: 0.52, w: 0.55, h: 0.30 };
-    setRoi(defaultRoi);
+    setRoi(DEFAULT_ROI);
   };
 
   return (
-    <div className="flex flex-col space-y-3 w-full">
-      {/* Control Header */}
-      <div className="flex items-center justify-between bg-slate-900 text-white px-3 py-2 rounded-lg text-xs border border-slate-800">
-        <div className="flex items-center gap-2 font-bold text-blue-400">
-          <Crop className="h-4 w-4" />
-          <span>Interactive Crop Mapper</span>
+    <div className="flex flex-col space-y-3 w-full bg-white rounded-xl">
+      {/* Control Header - Clean Light Theme */}
+      <div className="flex items-center justify-between bg-slate-100/90 text-slate-800 px-3 py-2 rounded-lg text-xs border border-slate-200 shadow-2xs">
+        <div className="flex items-center gap-2 font-bold text-blue-700">
+          <Crop className="h-4 w-4 text-blue-600" />
+          <span>Interactive Signature Crop</span>
         </div>
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleResetDefault}
-            className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-semibold transition-all flex items-center gap-1"
+            className="px-2 py-1 bg-white hover:bg-slate-200/80 text-slate-700 border border-slate-200 rounded text-[11px] font-semibold transition-all flex items-center gap-1 shadow-2xs cursor-pointer"
             title="Reset default signature area"
           >
-            <RotateCcw className="h-3 w-3" /> Auto ROI
+            <RotateCcw className="h-3 w-3 text-slate-500" /> Auto ROI
           </button>
           <button
             onClick={() => setIsZoomModalOpen(true)}
-            className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-semibold transition-all flex items-center gap-1"
+            className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-semibold transition-all flex items-center gap-1 shadow-2xs cursor-pointer"
             title="Expand to big view for precise mapping"
           >
             <ZoomIn className="h-3 w-3" /> Expand View
@@ -179,7 +184,7 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1 bg-slate-800 hover:bg-red-600 text-slate-400 hover:text-white rounded transition-colors"
+              className="p-1 bg-slate-200/80 hover:bg-red-600 text-slate-600 hover:text-white rounded transition-colors cursor-pointer"
               title="Close crop mapper"
             >
               <X className="h-3.5 w-3.5" />
@@ -188,26 +193,26 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
         </div>
       </div>
 
-      {/* Main Interactive Workspace Container */}
-      <div className="relative w-full flex justify-center items-center bg-slate-950 rounded-xl p-2 border border-slate-800 shadow-inner overflow-hidden select-none min-h-[200px]">
+      {/* Main Interactive Workspace Container - Clean Light Theme */}
+      <div className="relative w-full flex justify-center items-center bg-slate-100/80 rounded-xl p-2.5 border border-slate-200 shadow-inner overflow-hidden select-none min-h-[200px]">
         <div
           onMouseDown={(e) => handleMouseDown(e, false)}
           onMouseMove={(e) => handleMouseMove(e, false)}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          className="relative inline-block cursor-crosshair"
+          className="relative inline-block cursor-crosshair shadow-sm rounded overflow-hidden"
         >
           <img
             ref={imgRef}
             src={imageSrc}
             alt="Scanned Cheque"
-            className="max-h-[220px] w-auto max-w-full object-contain pointer-events-none block rounded opacity-95"
+            className="max-h-[220px] w-auto max-w-full object-contain pointer-events-none block rounded"
           />
 
           {/* Precision Crop Overlay Box */}
           <div
             data-box="true"
-            className="absolute border-2 border-blue-500 bg-blue-500/15 cursor-move shadow-[0_0_0_9999px_rgba(0,0,0,0.65)]"
+            className="absolute border-2 border-blue-600 bg-blue-600/20 cursor-move shadow-[0_0_0_9999px_rgba(15,23,42,0.45)]"
             style={{
               left: `${roi.x * 100}%`,
               top: `${roi.y * 100}%`,
@@ -216,8 +221,8 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
             }}
           >
             {/* Box Header Badge */}
-            <div className="absolute -top-5 left-0 bg-blue-600 text-white font-bold text-[9px] px-1.5 py-0.2 rounded shadow pointer-events-none whitespace-nowrap">
-              Mapped Crop Region
+            <div className="absolute -top-5 left-0 bg-blue-600 text-white font-bold text-[9px] px-1.5 py-0.5 rounded shadow pointer-events-none whitespace-nowrap">
+              Mapped Region
             </div>
 
             {/* Resize Handles */}
@@ -238,7 +243,7 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
         <Button
           onClick={() => onApplyCrop(roi)}
           disabled={isLoading}
-          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 rounded-lg shadow-md flex items-center justify-center gap-1.5"
+          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 rounded-lg shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
         >
           {isLoading ? (
             <>
@@ -258,59 +263,64 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
             type="button"
             variant="outline"
             onClick={onClose}
-            className="bg-white border-slate-300 text-slate-700 hover:bg-slate-100 text-xs py-2 px-3 font-semibold"
+            className="bg-white border-slate-300 text-slate-700 hover:bg-slate-100 text-xs py-2 px-3 font-semibold rounded-lg cursor-pointer"
           >
-            Done
+            Cancel
           </Button>
         )}
       </div>
 
-      {/* Expand / Big View Modal for Precise Mapping */}
+      {/* Expand / Big View Modal for Precise Mapping - Modern Light Theme */}
       {isZoomModalOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex flex-col items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950">
-              <div className="flex items-center gap-2 text-white font-bold text-sm">
-                <Maximize2 className="h-4 w-4 text-blue-400" />
-                <span>Expanded Full Cheque Signature Mapper</span>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-slate-50">
+              <div className="flex items-center gap-2.5 text-slate-900 font-bold text-sm">
+                <div className="p-1.5 bg-blue-100 text-blue-700 rounded-lg">
+                  <Maximize2 className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900">Expanded Full Cheque Signature Mapper</h3>
+                  <p className="text-[11px] text-slate-500 font-normal">Draw or adjust the bounding box over the signature area</p>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleResetDefault}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
                 >
-                  <RotateCcw className="h-3.5 w-3.5" /> Reset Auto ROI
+                  <RotateCcw className="h-3.5 w-3.5 text-slate-500" /> Reset Auto ROI
                 </button>
                 <button
                   onClick={() => setIsZoomModalOpen(false)}
-                  className="p-1.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-red-600 rounded-lg transition-colors"
+                  className="p-1.5 text-slate-500 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                 >
                   <X className="h-5 w-5" />
                 </button>
               </div>
             </div>
 
-            {/* Large Canvas Workspace */}
-            <div className="flex-1 overflow-auto p-6 bg-slate-950 flex items-center justify-center select-none">
+            {/* Large Canvas Workspace - Clean Light Theme */}
+            <div className="flex-1 overflow-auto p-6 bg-slate-100/90 flex items-center justify-center select-none">
               <div
                 onMouseDown={(e) => handleMouseDown(e, true)}
                 onMouseMove={(e) => handleMouseMove(e, true)}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
-                className="relative inline-block cursor-crosshair border-2 border-slate-800 rounded-lg shadow-xl"
+                className="relative inline-block cursor-crosshair border-2 border-slate-300 rounded-lg shadow-lg bg-white overflow-hidden"
               >
                 <img
                   ref={zoomImgRef}
                   src={imageSrc}
                   alt="Expanded Scanned Cheque"
-                  className="max-h-[65vh] w-auto object-contain pointer-events-none block rounded opacity-95"
+                  className="max-h-[62vh] w-auto object-contain pointer-events-none block rounded"
                 />
 
                 {/* Crop Box Overlay in Large View */}
                 <div
                   data-box="true"
-                  className="absolute border-2 border-blue-500 bg-blue-500/20 cursor-move shadow-[0_0_0_9999px_rgba(0,0,0,0.70)]"
+                  className="absolute border-2 border-blue-600 bg-blue-600/20 cursor-move shadow-[0_0_0_9999px_rgba(15,23,42,0.45)]"
                   style={{
                     left: `${roi.x * 100}%`,
                     top: `${roi.y * 100}%`,
@@ -334,9 +344,9 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
               </div>
             </div>
 
-            {/* Modal Footer Bar */}
-            <div className="px-6 py-4 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
-              <span className="text-xs text-slate-400">
+            {/* Modal Footer Bar - Clean Light Theme */}
+            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+              <span className="text-xs text-slate-600">
                 Click & drag over the cheque image to select a custom signature area for verification.
               </span>
               <div className="flex items-center gap-3">
@@ -344,7 +354,7 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
                   type="button"
                   variant="outline"
                   onClick={() => setIsZoomModalOpen(false)}
-                  className="bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 text-xs font-semibold"
+                  className="bg-white border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-semibold rounded-lg cursor-pointer"
                 >
                   Cancel
                 </Button>
@@ -354,7 +364,7 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
                     setIsZoomModalOpen(false);
                   }}
                   disabled={isLoading}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2 rounded-lg shadow-md flex items-center gap-2"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2 rounded-lg shadow-sm flex items-center gap-2 cursor-pointer"
                 >
                   <Check className="h-4 w-4" />
                   <span>Apply Crop & Recalculate Matches</span>
@@ -367,3 +377,4 @@ export const SignatureCropOverlay: React.FC<SignatureCropOverlayProps> = ({
     </div>
   );
 };
+
